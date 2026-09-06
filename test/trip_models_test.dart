@@ -1,0 +1,96 @@
+import 'package:flutter_test/flutter_test.dart';
+import 'package:trip_planner/models/trip_models.dart';
+
+void main() {
+  group('Trip 模型序列化', () {
+    test('toJson/fromJson 往返一致', () {
+      final trip = Trip(
+        name: '杭州3日游',
+        startDate: DateTime(2026, 10, 1),
+        endDate: DateTime(2026, 10, 3),
+        days: [
+          TripDay(
+            date: DateTime(2026, 10, 1),
+            dayNumber: 1,
+            locations: [
+              Location(
+                name: '西湖',
+                address: '杭州市西湖区',
+                latitude: 30.22,
+                longitude: 120.15,
+                city: '杭州',
+                type: LocationType.attraction,
+                stayMinutes: 120,
+                transportMinutes: 30,
+                openTime: '08:00',
+                closeTime: '18:00',
+              ),
+            ],
+          ),
+        ],
+      );
+
+      final restored = Trip.fromJson(trip.toJson());
+
+      expect(restored.id, trip.id);
+      expect(restored.name, '杭州3日游');
+      expect(restored.days.length, 1);
+      final loc = restored.days.first.locations.first;
+      expect(loc.name, '西湖');
+      expect(loc.type, LocationType.attraction);
+      expect(loc.stayMinutes, 120);
+      expect(loc.latitude, 30.22);
+      expect(loc.openTime, '08:00');
+    });
+
+    test('totalMinutes 计算 = 停留 + 交通', () {
+      final day = TripDay(
+        date: DateTime(2026, 10, 1),
+        dayNumber: 1,
+        locations: [
+          Location(name: 'A', address: '', type: LocationType.attraction, stayMinutes: 90, transportMinutes: 20),
+          Location(name: 'B', address: '', type: LocationType.restaurant, stayMinutes: 60),
+        ],
+      );
+      expect(day.totalMinutes, 170);
+    });
+
+    test('allLocations 拍平所有天', () {
+      final trip = Trip(
+        name: 't',
+        startDate: DateTime(2026, 10, 1),
+        endDate: DateTime(2026, 10, 2),
+        days: [
+          TripDay(date: DateTime(2026, 10, 1), dayNumber: 1, locations: [
+            Location(name: 'A', address: '', type: LocationType.attraction),
+          ]),
+          TripDay(date: DateTime(2026, 10, 2), dayNumber: 2, locations: [
+            Location(name: 'B', address: '', type: LocationType.attraction),
+            Location(name: 'C', address: '', type: LocationType.attraction),
+          ]),
+        ],
+      );
+      expect(trip.allLocations.length, 3);
+      expect(trip.totalDays, 2);
+    });
+  });
+
+  group('同城判断（跨城交通触发依据）', () {
+    test('相同 city 判同城', () {
+      final a = Location(name: 'A', address: 'xx路', city: '杭州', type: LocationType.attraction);
+      final b = Location(name: 'B', address: 'yy路', city: '杭州', type: LocationType.restaurant);
+      expect(a.isSameCity(b), isTrue);
+    });
+
+    test('不同 city 判跨城', () {
+      final a = Location(name: 'A', address: 'xx路', city: '杭州', type: LocationType.attraction);
+      final b = Location(name: 'B', address: 'yy路', city: '苏州', type: LocationType.attraction);
+      expect(a.isSameCity(b), isFalse);
+    });
+
+    test('无 city 字段时从地址解析', () {
+      final a = Location(name: 'A', address: '浙江省杭州市西湖区xx路', type: LocationType.attraction);
+      expect(a.cityName, contains('杭州'));
+    });
+  });
+}
