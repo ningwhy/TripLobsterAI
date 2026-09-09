@@ -8,6 +8,7 @@ import '../services/api_client.dart';
 import '../providers/trip_provider.dart';
 import 'trip_create_page.dart';
 import 'trip_map_page.dart';
+import 'route_poster_page.dart';
 import 'location_search_page.dart';
 
 /// 行程预览：时间轴 + 渐变地点卡 + 交通行 + 天气/停留信息（参考视觉稿）
@@ -128,9 +129,10 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           ),
           IconButton(
             icon: const Icon(Icons.ios_share, size: 20),
-            onPressed: () => ScaffoldMessenger.of(context).showSnackBar(
-              const SnackBar(content: Text('行程分享海报（路线图）功能开发中，敬请期待')),
-            ),
+            tooltip: '路线海报',
+            onPressed: () {
+              Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePosterPage(trip: widget.trip)));
+            },
           ),
           const SizedBox(width: 4),
         ],

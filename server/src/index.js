@@ -8,6 +8,7 @@ import { registerSyncRoutes } from './sync.js';
 import { registerAmapRoutes } from './amapProxy.js';
 import { registerWeatherRoutes } from './weather.js';
 import { registerPlannerRoutes } from './planner.js';
+import { registerCorridorRoutes } from './corridor.js';
 
 loadEnv();
 
@@ -42,6 +43,7 @@ registerSyncRoutes(app, db);
 registerAmapRoutes(app, db);
 registerWeatherRoutes(app);
 registerPlannerRoutes(app, db);
+registerCorridorRoutes(app);
 
 // 统一错误处理
 app.use((err, req, res, next) => {

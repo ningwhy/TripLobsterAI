@@ -171,6 +171,13 @@ class ApiClient {
     return Map<String, dynamic>.from(data);
   }
 
+  // ---------- 路线（路线海报用，OSRM 代理） ----------
+  static Future<Map<String, dynamic>> corridorRoute(List<List<double>> waypoints) async {
+    final w = waypoints.map((p) => '${p[0].toStringAsFixed(5)},${p[1].toStringAsFixed(5)}').join(';');
+    final data = await _request('GET', '/api/corridor/route?waypoints=${Uri.encodeQueryComponent(w)}', retries: 0);
+    return Map<String, dynamic>.from(data);
+  }
+
   // ---------- 健康检查 ----------
   static Future<bool> health() async {
     try {
