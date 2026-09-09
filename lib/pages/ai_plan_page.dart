@@ -41,6 +41,11 @@ class _AiPlanPageState extends State<AiPlanPage> {
   Map<String, dynamic>? _result;
   String? _error;
   TripMode _tripMode = TripMode.pureTransit;
+  int _adults = 2;
+  int _children = 0;
+  int _rooms = 1;
+  RoomType? _roomType;
+  String _budget = 'comfort';
 
   @override
   void initState() {
@@ -80,6 +85,11 @@ class _AiPlanPageState extends State<AiPlanPage> {
         tripMode: _tripMode.name,
         description: _descController.text.trim(),
         fromCity: provider.homeLocation?.city,
+        adults: _adults,
+        children: _children,
+        rooms: _rooms,
+        roomType: _roomType?.name,
+        budget: _budget,
         mustVisit: _mustController.text
             .split(RegExp(r'[,，、\s]+'))
             .where((e) => e.trim().isNotEmpty)
@@ -154,6 +164,11 @@ class _AiPlanPageState extends State<AiPlanPage> {
         orElse: () => TripMode.pureTransit,
       ),
       homeLocation: context.read<TripProvider>().homeLocation,
+      adults: _adults,
+      children: _children,
+      rooms: _rooms,
+      roomType: _roomType,
+      budget: _budget,
       createdAt: now,
       updatedAt: now,
     );
@@ -315,6 +330,43 @@ class _AiPlanPageState extends State<AiPlanPage> {
             border: OutlineInputBorder(),
             alignLabelWithHint: true,
           ),
+        ),
+        const SizedBox(height: 20),
+        const Text('出行人数与住宿', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        Row(
+          children: [
+            Expanded(child: _stepper('大人', _adults, (v) => setState(() => _adults = v), min: 1)),
+            const SizedBox(width: 10),
+            Expanded(child: _stepper('小孩', _children, (v) => setState(() => _children = v), min: 0)),
+            const SizedBox(width: 10),
+            Expanded(child: _stepper('房间', _rooms, (v) => setState(() => _rooms = v), min: 1)),
+          ],
+        ),
+        const SizedBox(height: 10),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final rt in RoomType.values)
+              ChoiceChip(
+                label: Text(rt.label),
+                selected: _roomType == rt,
+                onSelected: (_) => setState(() => _roomType = _roomType == rt ? null : rt),
+                selectedColor: AppColors.mintCircle,
+              ),
+          ],
+        ),
+        const SizedBox(height: 12),
+        const Text('酒店预算', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        SegmentedButton<String>(
+          segments: const [
+            ButtonSegment(value: 'economy', label: Text('经济 · <¥200')),
+            ButtonSegment(value: 'comfort', label: Text('舒适 · ¥200-500')),
+            ButtonSegment(value: 'luxury', label: Text('高档 · >¥500')),
+          ],
+          selected: {_budget},
+          onSelectionChanged: (s) => setState(() => _budget = s.first),
         ),
         if (_error != null) ...[
           const SizedBox(height: 16),
@@ -488,6 +540,36 @@ class _AiPlanPageState extends State<AiPlanPage> {
           ),
         ),
       ],
+    );
+  }
+
+  Widget _stepper(String label, int value, ValueChanged<int> onChanged, {int min = 0, int max = 9}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(10),
+        border: Border.all(color: const Color(0xFFE3EDE2)),
+      ),
+      child: Row(
+        children: [
+          Expanded(child: Text('$label $value', style: const TextStyle(fontSize: 13, color: AppColors.textPrimary))),
+          _stepBtn(Icons.remove_circle_outline, value > min, () => onChanged(value - 1)),
+          _stepBtn(Icons.add_circle_outline, value < max, () => onChanged(value + 1)),
+        ],
+      ),
+    );
+  }
+
+  Widget _stepBtn(IconData icon, bool enabled, VoidCallback onTap) {
+    return IconButton(
+      onPressed: enabled ? onTap : null,
+      icon: Icon(icon, size: 20),
+      color: AppColors.greenDark,
+      disabledColor: Colors.grey[300],
+      padding: EdgeInsets.zero,
+      constraints: const BoxConstraints(minWidth: 28, minHeight: 28),
+      splashRadius: 16,
     );
   }
 

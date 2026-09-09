@@ -3,13 +3,32 @@ import 'package:uuid/uuid.dart';
 enum LocationType { home, hotel, attraction, restaurant, shopping, transport, other }
 // 六类语义映射：美食=restaurant 住宿=hotel 游玩=attraction 购物=shopping 枢纽=transport 其他=other；home=行程原点（不属于六类）
 
-enum TransportType { flight, highSpeedTrain, train, bus, ship, taxi, subway, walk, selfDrive, other }
+enum TransportType { flight, highSpeedTrain, train, bus, ship, taxi, subway, walk, transit, selfDrive, other }
 
 /// 交通范围（与工具正交）：跨城线需枢纽点，同城线不需要
 enum TransportScope { intercity, intraCity }
 
 /// 行程类型（3类）：纯自驾 / 纯公共交通 / 公共交通+落地租车
 enum TripMode { pureDrive, pureTransit, transitPlusRental }
+
+/// 房型：标间 / 亲子间 / 大床房
+enum RoomType { twin, family, king }
+
+extension RoomTypeLabel on RoomType {
+  String get label => switch (this) {
+        RoomType.twin => '标间',
+        RoomType.family => '亲子间',
+        RoomType.king => '大床房',
+      };
+}
+
+RoomType? roomTypeFromName(String? name) {
+  if (name == null) return null;
+  for (final e in RoomType.values) {
+    if (e.name == name) return e;
+  }
+  return null;
+}
 
 enum MemberRole { admin, member }
 
@@ -22,6 +41,11 @@ class Trip {
   HomeLocation? homeLocation;
   List<Member> members;
   TripMode tripMode;
+  int adults; // 大人为数量
+  int children; // 小孩数量
+  int rooms; // 房间数
+  RoomType? roomType; // 房型偏好
+  String budget; // 酒店预算档：economy/comfort/luxury
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -34,6 +58,11 @@ class Trip {
     this.homeLocation,
     this.members = const [],
     this.tripMode = TripMode.pureTransit,
+    this.adults = 2,
+    this.children = 0,
+    this.rooms = 1,
+    this.roomType,
+    this.budget = 'comfort',
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : id = id ?? const Uuid().v4(),
@@ -55,6 +84,11 @@ class Trip {
     'homeLocation': homeLocation?.toJson(),
     'members': members.map((m) => m.toJson()).toList(),
     'tripMode': tripMode.name,
+    'adults': adults,
+    'children': children,
+    'rooms': rooms,
+    'roomType': roomType?.name,
+    'budget': budget,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -68,6 +102,11 @@ class Trip {
     homeLocation: json['homeLocation'] != null ? HomeLocation.fromJson(json['homeLocation']) : null,
     members: (json['members'] as List).map((m) => Member.fromJson(m)).toList(),
     tripMode: TripMode.values.firstWhere((e) => e.name == json['tripMode'], orElse: () => TripMode.pureTransit),
+    adults: json['adults'] ?? 2,
+    children: json['children'] ?? 0,
+    rooms: json['rooms'] ?? 1,
+    roomType: roomTypeFromName(json['roomType']),
+    budget: json['budget'] ?? 'comfort',
     createdAt: DateTime.parse(json['createdAt']),
     updatedAt: DateTime.parse(json['updatedAt']),
   );
@@ -259,6 +298,8 @@ class Transport {
         return '🚇 地铁';
       case TransportType.walk:
         return '🚶 步行';
+      case TransportType.transit:
+        return '🚌 公共交通';
       case TransportType.selfDrive:
         return '🚗 自驾';
       default:

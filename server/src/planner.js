@@ -73,6 +73,11 @@ function hubKindOf(typecode = '') {
   return null;
 }
 
+// 同城移动方式 → TransportType
+const MODE_TYPE = { walk: 'walk', transit: 'transit', drive: 'selfDrive' };
+const BUDGET_LABEL = { economy: '经济', comfort: '舒适', luxury: '高档' };
+const ROOM_TYPE_LABEL = { twin: '标间', family: '亲子间', king: '大床房' };
+
 const PACE_LABEL = { relaxed: '轻松', normal: '标准', packed: '特种兵' };
 
 // 从简短描述提取偏好线索（规则版；LLM 启用时描述会一并喂给 LLM）
@@ -389,11 +394,177 @@ async function findRentalHub(city, near) {
   }
 }
 
-async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripMode = 'pureTransit' }) {
+// ---------- 跨城交通（班次建议 + 真实枢纽） ----------
+async function geocodeCity(name) {
+  try {
+    const d = await amapCall('/v3/geocode/geo', { address: name });
+    const g = d?.geocodes?.[0];
+    if (g?.location && String(g.location).includes(',')) {
+      const [lng, lat] = String(g.location).split(',').map(Number);
+      if (Number.isFinite(lng) && Number.isFinite(lat)) return { lng, lat };
+    }
+  } catch {}
+  return null;
+}
+
+function parseHm(s) {
+  return toMin(String(s || ''));
+}
+
+async function buildIntercityPrefix(fromCity, toCity, warnings) {
+  const o = await geocodeCity(fromCity);
+  const dest = await geocodeCity(toCity);
+  if (!o || !dest) {
+    warnings.push(`无法定位「${fromCity}→${toCity}」，请自行安排跨城交通`);
+    return null;
+  }
+  const distKm = haversineKm(o, dest);
+  let data = null;
+  try {
+    data = await amapCall('/v3/intercity/transit', {
+      origin: `${o.lng},${o.lat}`,
+      destination: `${dest.lng},${dest.lat}`,
+      cityd: fromCity,
+      dstd: toCity,
+      strategy: '0',
+      extensions: 'all',
+    });
+  } catch {}
+  const mapLine = (x, kind) => ({
+    kind,
+    no: x.line_name || x.flight_no || x.train_no || '',
+    dep: x.dep_time || '',
+    arr: x.arr_time || '',
+    dur: parseInt(x.duration, 10) || null,
+    price: x.price,
+    depName: x.dep_airport || x.dep_station || '',
+    arrName: x.arr_airport || x.arr_station || '',
+  });
+  const flights = (data?.flight || []).map((f) => mapLine(f, 'flight')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null);
+  const trains = (data?.train || []).map((t) => mapLine(t, 'train')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null);
+  const preferFlight = distKm > 800;
+
+  let line;
+  if (flights.length || trains.length) {
+    let pool = preferFlight ? (flights.length ? flights : trains) : (trains.length ? trains : flights);
+    pool.sort((a, b) => parseHm(a.dep) - parseHm(b.dep));
+    // 优先早上 7:30-11:30 出发的班次（到达后还能玩半天）
+    const morning = pool.filter((l) => {
+      const m = parseHm(l.dep);
+      return m >= 450 && m <= 690;
+    });
+    line = morning[0] || pool[0];
+  } else {
+    // 高德跨城班次接口需企业认证（10002）：按距离估算建议时段，班次号待用户预订时填
+    const flightMin = Math.round((distKm / 800) * 60 + 90);
+    const trainMin = Math.round((distKm / 300) * 60);
+    const useFlight = preferFlight || trainMin > 480;
+    line = useFlight
+      ? { kind: 'flight', no: '', dep: '08:30', arr: fmt(510 + flightMin), dur: flightMin, price: null, depName: '', arrName: '' }
+      : { kind: 'train', no: '', dep: '08:00', arr: fmt(480 + trainMin), dur: trainMin, price: null, depName: '', arrName: '' };
+    warnings.push('跨城班次实时查询需要高德企业认证，已按典型时长生成建议时段，预订时选早班（到达后还能玩半天）');
+  }
+  const depMin = parseHm(line.dep);
+  const arrMin = parseHm(line.arr);
+  const hubKw = line.kind === 'flight' ? '机场' : '火车站';
+  const fallbackCode = line.kind === 'flight' ? '150100' : '150200';
+
+  const mkHub = async (cityName, ref) => {
+    const pois = await queryPois(cityName, { keywords: hubKw }, 1);
+    const poi = pois.map(normalizePoi).find(Boolean);
+    return {
+      lng: poi ? poi.lng : ref.lng,
+      lat: poi ? poi.lat : ref.lat,
+      name: poi ? poi.name : `${cityName}${hubKw}`,
+      address: poi ? poi.address : cityName,
+      city: poi ? poi.city : cityName,
+      typecode: poi && poi.typecode ? poi.typecode : fallbackCode,
+      rating: poi ? poi.rating : 0,
+    };
+  };
+  const depPoi = await mkHub(fromCity, o);
+  const arrPoi = await mkHub(toCity, dest);
+
+  // 出发枢纽：提前3小时离家，含值机/候车150分钟
+  const depHub = toLocation(depPoi, depMin - 180, 150, null, {});
+  depHub.transport = {
+    type: 'taxi',
+    scope: 'intraCity',
+    durationMinutes: 90,
+    departureTime: fmt(depMin - 270),
+    arrivalTime: fmt(depMin - 180),
+  };
+  // 到达枢纽：下机/出站45分钟
+  const arrHub = toLocation(arrPoi, arrMin, 45, null, {});
+  arrHub.transport = {
+    type: line.kind === 'flight' ? 'flight' : 'highSpeedTrain',
+    scope: 'intercity',
+    flightNumber: line.no || null,
+    departureTime: line.dep,
+    arrivalTime: line.arr,
+    durationMinutes: line.dur,
+    price: line.price,
+  };
+  warnings.push(
+    `跨城交通建议：${line.kind === 'flight' ? '✈️' : '🚄'} ${line.no ? line.no + ' ' : ''}${fromCity} ${line.dep} → ${toCity} ${line.arr}${line.price ? `（约¥${line.price}）` : ''}，第1天行程从到达后开始`
+  );
+  return { depHub, arrHub, depMin, arrMin };
+}
+
+// ---------- 每晚酒店（评分 + 价格档过滤） ----------
+const BUDGET_RANGE = {
+  economy: { max: 250 },
+  comfort: { min: 150, max: 600 },
+  luxury: { min: 400 },
+};
+
+function parseCost(cost) {
+  const m = String(cost || '').match(/(\d+)(?:\s*-\s*(\d+))?/);
+  if (!m) return null;
+  return { low: parseInt(m[1], 10), high: m[2] ? parseInt(m[2], 10) : parseInt(m[1], 10) };
+}
+
+async function findHotel(near, budgetKey) {
+  try {
+    const data = await amapCall('/v3/place/around', {
+      location: `${near.lng},${near.lat}`,
+      types: '100000',
+      radius: '8000',
+      offset: '20',
+      page: '1',
+      extensions: 'all',
+      sortrule: 'weight',
+    });
+    let hotels = (data?.pois || [])
+      .map((p) => {
+        const n = normalizePoi(p);
+        return n ? { ...n, cost: p.biz_ext?.cost } : null;
+      })
+      .filter(Boolean);
+    if (!hotels.length) return null;
+    const range = BUDGET_RANGE[budgetKey];
+    if (range) {
+      const filtered = hotels.filter((h) => {
+        const c = parseCost(h.cost);
+        if (!c) return false;
+        if (range.max != null && c.low > range.max) return false;
+        if (range.min != null && c.high < range.min) return false;
+        return true;
+      });
+      if (filtered.length) hotels = filtered;
+    }
+    hotels.sort((a, b) => (b.rating || 3.5) - (a.rating || 3.5));
+    return hotels[0];
+  } catch {
+    return null;
+  }
+}
+
+async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripMode = 'pureTransit', startClock = null, origin = null }) {
   if (!points.length) return { date: dateStr, dayNumber: dayIndex + 1, locations: [] };
   const driveMode = tripMode === 'pureDrive' || tripMode === 'transitPlusRental';
   const ordered = tourOrder(points);
-  let clock = START_CLOCK[pace];
+  let clock = startClock ?? START_CLOCK[pace];
   const locations = [];
   let prev = null;
   let lunchDone = false, dinnerDone = false;
@@ -422,7 +593,9 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
   };
 
   for (const poi of ordered) {
-    let travel = prev ? await segmentMinutes(prev, poi, city, driveMode ? 'drive' : 'transit') : null;
+    let travel = prev
+        ? await segmentMinutes(prev, poi, city, driveMode ? 'drive' : 'transit')
+        : (origin ? await segmentMinutes(origin, poi, city, driveMode ? 'drive' : 'transit') : null);
     // 长距离自驾（>200km）插入服务区休息点（决策#4）
     if (travel && driveMode && travel.km > 200) {
       const rest = await findRestStop(prev, poi);
@@ -485,6 +658,14 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
     stayMinutes: stay,
     transportMinutes: travel ? travel.minutes : null,
     transportMode: travel ? travel.mode : null,
+    transport: travel
+        ? {
+            type: MODE_TYPE[travel.mode] || 'other',
+            scope: 'intraCity',
+            durationMinutes: travel.minutes,
+            distance: Math.round((travel.km || 0) * 1000),
+          }
+        : null,
     openTime: poi.openTime || null,
     closeTime: poi.closeTime || null,
     rating: poi.rating || null,
@@ -584,6 +765,23 @@ export async function generateTrip(input) {
   }
   if (!groups) groups = clusterByDay(selected, days, cap);
 
+  // 出行人数/房型/预算（决策#5）
+  const party = {
+    adults: Math.max(1, parseInt(input.adults, 10) || 2),
+    children: Math.max(0, parseInt(input.children, 10) || 0),
+    rooms: Math.max(1, parseInt(input.rooms, 10) || 1),
+    roomType: ['twin', 'family', 'king'].includes(input.roomType) ? input.roomType : null,
+  };
+  const budget = ['economy', 'comfort', 'luxury'].includes(input.budget) ? input.budget : 'comfort';
+  const driveMode = tripMode === 'pureDrive' || tripMode === 'transitPlusRental';
+
+  // 跨城交通：班次建议 + 真实枢纽（决策#3）
+  const fromCity = String(input.fromCity || '').trim();
+  let prefix = null;
+  if (fromCity && fromCity.replace(/(市|地区|自治州)$/, '') !== city.replace(/(市|地区|自治州)$/, '')) {
+    prefix = await buildIntercityPrefix(fromCity, city, warnings);
+  }
+
   // 落地租车：第1天首位插入取车点（枢纽子类型 rental，决策#2）
   if (tripMode === 'transitPlusRental' && groups[0]?.length) {
     const rental = await findRentalHub(city, groups[0][0]);
@@ -596,9 +794,49 @@ export async function generateTrip(input) {
   }
 
   const dayResults = [];
+  let prevHotel = null;
   for (let i = 0; i < days; i++) {
-    const pts = (groups[i] || []).map((p) => ({ ...p, _must: mustIds.has(p.id) }));
-    dayResults.push(await buildDay(i, addDays(startDate, i), pts, { pace, city, warnings, tripMode }));
+    const isLastDay = i === days - 1;
+    let pts = (groups[i] || []).map((p) => ({ ...p, _must: mustIds.has(p.id) }));
+    let startClock = null;
+    if (i === 0 && prefix) {
+      // 第1天从到达后开始，按剩余时间裁剪景点数
+      startClock = Math.min(prefix.arrMin + 45, 20 * 60);
+      const remainH = Math.max(0.5, (20 * 60 - startClock) / 60);
+      const cap1 = Math.max(1, Math.floor(remainH / 2.8));
+      if (pts.length > cap1) pts = pts.slice(0, cap1);
+    }
+    dayResults.push(
+      await buildDay(i, addDays(startDate, i), pts, { pace, city, warnings, tripMode, startClock, origin: prevHotel })
+    );
+    const day = dayResults[dayResults.length - 1];
+
+    // 每晚酒店：当天最后一站附近选，评分+价格档过滤，次日从酒店出发（决策#4）
+    if (!isLastDay) {
+      const dayPts = (groups[i] || []).filter((p) => p.lat && p.lng);
+      const anchor = dayPts.length ? dayPts[dayPts.length - 1] : prevHotel;
+      if (anchor) {
+        const hotel = await findHotel(anchor, budget);
+        if (hotel) {
+          const lastLoc = day.locations[day.locations.length - 1];
+          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (startClock ?? START_CLOCK[pace]);
+          const travel = await segmentMinutes(anchor, hotel, city, driveMode ? 'drive' : 'transit');
+          const arrival = base + (travel ? travel.minutes : 15);
+          day.locations.push(toLocation({ ...hotel, typecode: '100100' }, arrival, 600, travel, {}));
+          prevHotel = hotel;
+          const partyNote = party.children > 0 ? `${party.adults}大${party.children}小` : `${party.adults}人`;
+          const roomNote = party.roomType ? `·${ROOM_TYPE_LABEL[party.roomType]}` : '';
+          warnings.push(`第${i + 1}晚住宿：${hotel.name}（${partyNote}·${party.rooms}间${roomNote}·${BUDGET_LABEL[budget]}档）`);
+        } else {
+          warnings.push(`第${i + 1}晚未找到合适酒店，请自行预订`);
+        }
+      }
+    }
+  }
+
+  // 跨城段插入第1天头部：家→出发枢纽→班次→到达枢纽→市区
+  if (prefix) {
+    dayResults[0].locations = [prefix.depHub, prefix.arrHub, ...dayResults[0].locations];
   }
 
   const totalPlaces = dayResults.reduce((s, d) => s + d.locations.filter((l) => l.type === 'attraction').length, 0);
@@ -608,6 +846,11 @@ export async function generateTrip(input) {
       startDate,
       endDate: addDays(startDate, days - 1),
       tripMode,
+      adults: party.adults,
+      children: party.children,
+      rooms: party.rooms,
+      roomType: party.roomType,
+      budget,
       days: dayResults,
     },
     stats: { totalPlaces, days, source, pace, tripMode, hints: hints.notes, fromCity: input.fromCity || null },

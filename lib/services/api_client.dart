@@ -137,6 +137,11 @@ class ApiClient {
     String tripMode = 'pureTransit',
     String description = '',
     String? fromCity,
+    int adults = 2,
+    int children = 0,
+    int rooms = 1,
+    String? roomType,
+    String budget = 'comfort',
     List<String> mustVisit = const [],
   }) async {
     final data = await _request('POST', '/api/planner/generate', body: {
@@ -148,6 +153,11 @@ class ApiClient {
       'tripMode': tripMode,
       'description': description,
       'fromCity': fromCity,
+      'adults': adults,
+      'children': children,
+      'rooms': rooms,
+      'roomType': roomType,
+      'budget': budget,
       'mustVisit': mustVisit,
     }, timeout: _longTimeout, retries: 0);
     return Map<String, dynamic>.from(data);
