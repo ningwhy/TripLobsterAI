@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../models/trip_models.dart';
 import '../theme/app_colors.dart';
 import '../services/api_client.dart';
@@ -646,6 +647,42 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
                   )),
               const Divider(height: 1, indent: 20, endIndent: 20),
             ],
+            // OTA 深链：房型/实时价/装修年份在预订页核实（联盟 key 到位后升级为库内数据）
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
+              child: Align(
+                alignment: Alignment.centerLeft,
+                child: Text('查看房型与实时价（跳转第三方）', style: TextStyle(fontSize: 12, color: AppColors.textSub)),
+              ),
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.map_rounded, size: 20, color: Color(0xFF4CA84A)),
+              title: const Text('高德·详情与预订入口', style: TextStyle(fontSize: 14)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openExternal('https://uri.amap.com/search?keyword=${Uri.encodeQueryComponent(loc.name)}');
+              },
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.flight_takeoff_rounded, size: 20, color: Color(0xFF2E7D9C)),
+              title: const Text('携程·查房型与价格', style: TextStyle(fontSize: 14)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openExternal('https://m.ctrip.com/webapp/search/?keyword=${Uri.encodeQueryComponent(loc.name)}');
+              },
+            ),
+            ListTile(
+              dense: true,
+              leading: const Icon(Icons.storefront_rounded, size: 20, color: Color(0xFFE58E26)),
+              title: const Text('美团·比价', style: TextStyle(fontSize: 14)),
+              onTap: () {
+                Navigator.pop(ctx);
+                _openExternal('https://www.meituan.com/s/${Uri.encodeComponent(loc.name)}');
+              },
+            ),
+            const Divider(height: 1, indent: 20, endIndent: 20),
             ListTile(
               leading: const Icon(Icons.timelapse_outlined, color: AppColors.greenDark),
               title: const Text('调整停留时长'),
@@ -667,6 +704,16 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
         ),
       ),
     );
+  }
+
+  Future<void> _openExternal(String url) async {
+    try {
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+    } catch (_) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('未能打开链接，可复制地点名称到对应 App 搜索')),
+      );
+    }
   }
 
   Future<void> _switchHotel(Location loc, Map<String, dynamic> cand) async {
