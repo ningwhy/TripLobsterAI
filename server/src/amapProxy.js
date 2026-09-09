@@ -13,6 +13,7 @@ const ALLOWED = new Set([
   '/v3/direction/walking',
   '/v3/geocode/geo',
   '/v3/geocode/regeo',
+  '/v3/config/district',
   '/v3/intercity/transit',
 ]);
 

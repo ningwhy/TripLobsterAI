@@ -9,6 +9,7 @@ import '../providers/trip_provider.dart';
 import 'trip_create_page.dart';
 import 'trip_map_page.dart';
 import 'route_poster_page.dart';
+import 'schematic_map_page.dart';
 import 'location_search_page.dart';
 
 /// 行程预览：时间轴 + 渐变地点卡 + 交通行 + 天气/停留信息（参考视觉稿）
@@ -129,10 +130,8 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           ),
           IconButton(
             icon: const Icon(Icons.ios_share, size: 20),
-            tooltip: '路线海报',
-            onPressed: () {
-              Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePosterPage(trip: widget.trip)));
-            },
+            tooltip: '行程海报',
+            onPressed: () => _showPosterSheet(),
           ),
           const SizedBox(width: 4),
         ],
@@ -699,6 +698,43 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
               onTap: () {
                 Navigator.pop(ctx);
                 _removeLocation(loc);
+              },
+            ),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showPosterSheet() {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Text('生成行程海报', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+            ),
+            ListTile(
+              leading: const Icon(Icons.satellite_alt_rounded, size: 22, color: Color(0xFF5B9BD5)),
+              title: const Text('卫星路线图', style: TextStyle(fontSize: 14)),
+              subtitle: const Text('卫星底图 + 真实路线，硬核风', style: TextStyle(fontSize: 11, color: AppColors.textSub)),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePosterPage(trip: widget.trip)));
+              },
+            ),
+            ListTile(
+              leading: const Icon(Icons.map_rounded, size: 22, color: Color(0xFFC9A227)),
+              title: const Text('手绘示意图（游戏风）', style: TextStyle(fontSize: 14)),
+              subtitle: const Text('羊皮纸底图 + 贴纸点位 + 山水标注', style: TextStyle(fontSize: 11, color: AppColors.textSub)),
+              onTap: () {
+                Navigator.pop(ctx);
+                Navigator.push(context, MaterialPageRoute(builder: (_) => SchematicMapPage(trip: widget.trip)));
               },
             ),
             const SizedBox(height: 8),

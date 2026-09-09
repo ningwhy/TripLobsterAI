@@ -178,6 +178,17 @@ class ApiClient {
     return Map<String, dynamic>.from(data);
   }
 
+  // ---------- 示意图数据 ----------
+  static Future<Map<String, dynamic>> geoBoundary(List<String> cities) async {
+    final data = await _request('GET', '/api/geo/boundary?city=${Uri.encodeQueryComponent(cities.join(','))}');
+    return Map<String, dynamic>.from(data);
+  }
+
+  static Future<Map<String, dynamic>> geoNature(String city, String bbox) async {
+    final data = await _request('GET', '/api/geo/nature?city=${Uri.encodeQueryComponent(city)}&bbox=$bbox', retries: 0);
+    return Map<String, dynamic>.from(data);
+  }
+
   // ---------- 健康检查 ----------
   static Future<bool> health() async {
     try {

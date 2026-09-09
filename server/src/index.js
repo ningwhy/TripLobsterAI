@@ -9,6 +9,7 @@ import { registerAmapRoutes } from './amapProxy.js';
 import { registerWeatherRoutes } from './weather.js';
 import { registerPlannerRoutes } from './planner.js';
 import { registerCorridorRoutes } from './corridor.js';
+import { registerGeoRoutes } from './geo.js';
 
 loadEnv();
 
@@ -44,6 +45,7 @@ registerAmapRoutes(app, db);
 registerWeatherRoutes(app);
 registerPlannerRoutes(app, db);
 registerCorridorRoutes(app);
+registerGeoRoutes(app);
 
 // 统一错误处理
 app.use((err, req, res, next) => {
