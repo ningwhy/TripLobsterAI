@@ -73,6 +73,40 @@ function hubKindOf(typecode = '') {
   return null;
 }
 
+const PACE_LABEL = { relaxed: '轻松', normal: '标准', packed: '特种兵' };
+
+// 从简短描述提取偏好线索（规则版；LLM 启用时描述会一并喂给 LLM）
+function extractHints(desc = '') {
+  const hints = { interests: [], pace: null, notes: [] };
+  if (!desc) return hints;
+  if (/亲子|带娃|孩子|小孩|遛娃|宝宝/.test(desc)) {
+    hints.interests.push('fun');
+    hints.notes.push('检测到亲子需求：已补充主题乐园类兴趣');
+  }
+  if (/老人|长辈|爸妈|父母|爷爷|奶奶|外婆|外公/.test(desc)) {
+    if (!hints.pace) hints.pace = 'relaxed';
+    hints.notes.push('同行有老人：已放缓节奏');
+  }
+  if (/特种兵|紧凑|多打卡|高强度/.test(desc)) {
+    hints.pace = 'packed';
+    hints.notes.push('按描述调整为特种兵节奏');
+  }
+  if (/慢慢|休闲|躺平|放松|不赶/.test(desc)) {
+    if (!hints.pace) hints.pace = 'relaxed';
+  }
+  if (/博物馆|历史|人文|古迹|古镇/.test(desc)) {
+    hints.interests.push('culture', 'museum');
+    hints.notes.push('检测到人文偏好：已补充历史/博物馆兴趣');
+  }
+  if (/拍照|摄影|出片|风景|自然/.test(desc)) hints.interests.push('nature');
+  if (/购物|逛街|买买买/.test(desc)) hints.interests.push('shopping');
+  if (/文艺|艺术|文创/.test(desc)) hints.interests.push('arts');
+  if (/美食|小吃|觅食|好吃|吃货/.test(desc)) {
+    hints.notes.push('美食偏好：餐厅推荐会更注重本地特色');
+  }
+  return hints;
+}
+
 function baseStay(poi) {
   const tc = String(poi.typecode || '');
   const name = String(poi.name || '');
@@ -417,6 +451,15 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
       }
     }
   }
+  // 天结束较早（如轻松节奏）时，补插入午餐
+  if (!lunchDone && clock >= 12 * 60 && ordered.length) {
+    const lastPoi = ordered[ordered.length - 1];
+    const meal = await findNearbyRestaurant(lastPoi.lng, lastPoi.lat, Math.max(clock, 12 * 60));
+    if (meal) {
+      await pushLoc({ ...meal, typecode: '050100' }, { minutes: 10, mode: 'walk', km: 0.6 }, { isMeal: '午餐' });
+      lunchDone = true;
+    }
+  }
   // 超时裁剪：砍掉最晚的非必去景点
   while (clock > 21.5 * 60 && locations.length > 2) {
     const idx = [...locations].reverse().findIndex((l) => !l._must && l.type === 'attraction');
@@ -458,14 +501,14 @@ function addDays(iso, n) {
   return d.toISOString().slice(0, 10);
 }
 
-async function llmAssign(candidates, days, interestLabels) {
+async function llmAssign(candidates, days, interestLabels, desc = '') {
   // LLM 只负责"分组与主题"，失败返回 null 由规则兜底
   try {
     const list = candidates.map((c, i) => ({ i, name: c.name, rating: c.rating, district: c.district }));
     const content = await llmChat(
       [
         { role: 'system', content: '你是旅行规划师。把给定景点分配到各天，按地理就近原则，输出JSON：{"groups":[[索引,...],...],"themes":["主题",...]}，groups数量必须等于天数，每个索引只能用一次。' },
-        { role: 'user', content: JSON.stringify({ days, interests: interestLabels, places: list }) },
+        { role: 'user', content: JSON.stringify({ days, interests: interestLabels, 用户描述: desc || '无', places: list }) },
       ],
       { jsonMode: true }
     );
@@ -483,13 +526,25 @@ export async function generateTrip(input) {
   const city = String(input.city || '').trim();
   if (!city) { const e = new Error('请填写目的地城市'); e.status = 400; e.expose = true; throw e; }
   const days = Math.min(10, Math.max(1, parseInt(input.days, 10) || 3));
-  const pace = ['relaxed', 'normal', 'packed'].includes(input.pace) ? input.pace : 'normal';
   const tripMode = ['pureDrive', 'pureTransit', 'transitPlusRental'].includes(input.tripMode) ? input.tripMode : 'pureTransit';
-  const interestKeys = (Array.isArray(input.interests) && input.interests.filter((k) => INTERESTS[k]).length
+  const warnings = [];
+
+  // 简短描述 → 偏好线索（兴趣补充、节奏调整）
+  const hints = extractHints(String(input.description || '').trim());
+  let pace = ['relaxed', 'normal', 'packed'].includes(input.pace) ? input.pace : 'normal';
+  let interestKeys = (Array.isArray(input.interests) && input.interests.filter((k) => INTERESTS[k]).length
     ? input.interests.filter((k) => INTERESTS[k])
     : ['nature', 'culture']);
+  for (const k of hints.interests) {
+    if (!interestKeys.includes(k)) interestKeys.push(k);
+  }
+  if (hints.pace && hints.pace !== pace) {
+    warnings.push(`根据你的描述，节奏已调整为「${PACE_LABEL[hints.pace]}」`);
+    pace = hints.pace;
+  }
+  for (const n of hints.notes) warnings.push(n);
+
   const startDate = /^\d{4}-\d{2}-\d{2}$/.test(input.startDate || '') ? input.startDate : addDays(new Date().toISOString().slice(0, 10), 14);
-  const warnings = [];
 
   const cap = PER_DAY_CAP[pace];
   const need = days * cap;
@@ -524,7 +579,7 @@ export async function generateTrip(input) {
   let groups;
   let source = 'rule';
   if (isLlmEnabled()) {
-    const assigned = await llmAssign(selected, days, interestKeys.map((k) => INTERESTS[k].label));
+    const assigned = await llmAssign(selected, days, interestKeys.map((k) => INTERESTS[k].label), String(input.description || '').trim());
     if (assigned) { groups = assigned; source = 'llm+rule'; }
   }
   if (!groups) groups = clusterByDay(selected, days, cap);
@@ -555,7 +610,7 @@ export async function generateTrip(input) {
       tripMode,
       days: dayResults,
     },
-    stats: { totalPlaces, days, source, pace, tripMode },
+    stats: { totalPlaces, days, source, pace, tripMode, hints: hints.notes, fromCity: input.fromCity || null },
     warnings,
   };
 }

@@ -66,6 +66,8 @@ const plan = await j('POST', '/api/planner/generate', {
   pace: 'normal',
   interests: ['nature', 'culture', 'museum'],
   tripMode: 'pureTransit',
+  description: '带爸妈和孩子的亲子游，想吃本地美食',
+  fromCity: '上海',
   mustVisit: ['西湖'],
 });
 console.log(`planner took ${((Date.now() - t0) / 1000).toFixed(1)}s`);
@@ -78,6 +80,7 @@ check('planner first place has time', Boolean(day1?.arrivalTime), day1 ? `${day1
 check('planner mustVisit honored', JSON.stringify(plan.trip).includes('西湖'));
 check('planner warnings is array', Array.isArray(plan.warnings));
 check('planner tripMode echoed', plan.trip?.tripMode === 'pureTransit', `mode=${plan.trip?.tripMode}`);
+check('planner description hints', (plan.stats?.hints?.length ?? 0) >= 2 && plan.trip?.days?.length === 3, `hints=${(plan.stats?.hints || []).join(';')}`);
 const allTypes = (plan.trip?.days || []).flatMap((d) => d.locations.map((l) => l.type));
 check('planner 六类归类生效', allTypes.includes('restaurant') && allTypes.every((t) => ['attraction','restaurant','hotel','shopping','transport','other'].includes(t)), `types=${[...new Set(allTypes)].join(',')}`);
 console.log(JSON.stringify(plan.trip.days.map((d) => ({

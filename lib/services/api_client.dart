@@ -135,6 +135,8 @@ class ApiClient {
     required String pace,
     required List<String> interests,
     String tripMode = 'pureTransit',
+    String description = '',
+    String? fromCity,
     List<String> mustVisit = const [],
   }) async {
     final data = await _request('POST', '/api/planner/generate', body: {
@@ -144,6 +146,8 @@ class ApiClient {
       'pace': pace,
       'interests': interests,
       'tripMode': tripMode,
+      'description': description,
+      'fromCity': fromCity,
       'mustVisit': mustVisit,
     }, timeout: _longTimeout, retries: 0);
     return Map<String, dynamic>.from(data);

@@ -4,6 +4,8 @@ import 'package:provider/provider.dart';
 import '../models/trip_models.dart';
 import '../providers/trip_provider.dart';
 import '../services/api_client.dart';
+import '../theme/app_colors.dart';
+import 'location_search_page.dart';
 import 'trip_preview_page.dart';
 
 /// P0-2 AI 智能行程生成
@@ -29,6 +31,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
 
   final _cityController = TextEditingController();
   final _mustController = TextEditingController();
+  final _descController = TextEditingController();
   DateTime _startDate = DateTime.now().add(const Duration(days: 14));
   int _days = 3;
   String _pace = 'normal';
@@ -51,6 +54,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
   void dispose() {
     _cityController.dispose();
     _mustController.dispose();
+    _descController.dispose();
     super.dispose();
   }
 
@@ -66,6 +70,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
       _result = null;
     });
     try {
+      final provider = context.read<TripProvider>();
       final result = await ApiClient.generatePlan(
         city: city,
         days: _days,
@@ -73,6 +78,8 @@ class _AiPlanPageState extends State<AiPlanPage> {
         pace: _pace,
         interests: _selectedInterests.toList(),
         tripMode: _tripMode.name,
+        description: _descController.text.trim(),
+        fromCity: provider.homeLocation?.city,
         mustVisit: _mustController.text
             .split(RegExp(r'[,，、\s]+'))
             .where((e) => e.trim().isNotEmpty)
@@ -146,6 +153,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
         (e) => e.name == tripData['tripMode'],
         orElse: () => TripMode.pureTransit,
       ),
+      homeLocation: context.read<TripProvider>().homeLocation,
       createdAt: now,
       updatedAt: now,
     );
@@ -210,6 +218,8 @@ class _AiPlanPageState extends State<AiPlanPage> {
             border: OutlineInputBorder(),
           ),
         ),
+        const SizedBox(height: 12),
+        _buildDepartureRow(),
         const SizedBox(height: 16),
         Row(
           children: [
@@ -291,6 +301,19 @@ class _AiPlanPageState extends State<AiPlanPage> {
             hintText: '如：西湖, 灵隐寺',
             prefixIcon: Icon(Icons.push_pin_outlined),
             border: OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 16),
+        TextField(
+          controller: _descController,
+          maxLines: 3,
+          maxLength: 120,
+          decoration: const InputDecoration(
+            labelText: '简短描述（AI 会据此调整行程）',
+            hintText: '如：带爸妈和娃，想吃本地菜，节奏慢些\n首次去，想去经典景点',
+            prefixIcon: Icon(Icons.edit_note),
+            border: OutlineInputBorder(),
+            alignLabelWithHint: true,
           ),
         ),
         if (_error != null) ...[
@@ -465,6 +488,67 @@ class _AiPlanPageState extends State<AiPlanPage> {
           ),
         ),
       ],
+    );
+  }
+
+  /// 出发地行：默认取“家”，未设置时引导去没置
+  Widget _buildDepartureRow() {
+    return Consumer<TripProvider>(
+      builder: (context, provider, _) {
+        final home = provider.homeLocation;
+        return InkWell(
+          onTap: () async {
+            final result = await Navigator.push<Location>(
+              context,
+              MaterialPageRoute(builder: (_) => const LocationSearchPage()),
+            );
+            if (result == null || !mounted) return;
+            await provider.setHomeLocation(HomeLocation(
+              id: 'home',
+              name: result.name,
+              address: result.address,
+              latitude: result.latitude,
+              longitude: result.longitude,
+              city: result.city,
+              district: result.district,
+            ));
+          },
+          borderRadius: BorderRadius.circular(10),
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 12),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(color: const Color(0xFFE3EDE2)),
+            ),
+            child: Row(
+              children: [
+                const Icon(Icons.home_outlined, size: 18, color: Color(0xFF4CA84A)),
+                const SizedBox(width: 8),
+                const Text('出发地', style: TextStyle(fontSize: 13, color: AppColors.textSub)),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    home != null ? (home.city != null && home.city!.isNotEmpty ? home.city! : home.name) : '未设置，点击选择家的位置',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: home != null ? const Color(0xFF2E4A38) : const Color(0xFFE58E26),
+                      fontWeight: home != null ? FontWeight.w500 : FontWeight.normal,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                Icon(
+                  home != null ? Icons.check_circle : Icons.chevron_right,
+                  size: 16,
+                  color: home != null ? const Color(0xFF4CA84A) : Colors.grey,
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
