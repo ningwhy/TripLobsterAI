@@ -1,0 +1,547 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>行程地图 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+        }
+
+        /* Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+
+        /* Map Toggle */
+        .map-toggle {
+            display: flex;
+            background: var(--card-bg);
+            margin: 16px;
+            border-radius: 12px;
+            padding: 4px;
+            gap: 4px;
+        }
+        .map-toggle .tab {
+            flex: 1;
+            text-align: center;
+            padding: 12px;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .map-toggle .tab.active {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Map Container */
+        .map-container {
+            position: relative;
+            height: calc(100vh - 180px);
+            margin: 0 16px 16px;
+            border-radius: 16px;
+            overflow: hidden;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.1);
+        }
+
+        /* Cartoon Map - 示意图 */
+        .cartoon-map {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(180deg, #E8F5E9 0%, #C8E6C9 50%, #A5D6A7 100%);
+            display: none;
+        }
+        .cartoon-map.active { display: block; }
+
+        /* 简化道路网格 */
+        .cartoon-road {
+            position: absolute;
+            background: rgba(255,255,255,0.6);
+            border-radius: 4px;
+        }
+        .cartoon-road.h1 { top: 35%; left: 5%; width: 90%; height: 6px; }
+        .cartoon-road.h2 { top: 55%; left: 15%; width: 70%; height: 6px; }
+        .cartoon-road.v1 { top: 25%; left: 30%; width: 6px; height: 50%; }
+        .cartoon-road.v2 { top: 45%; left: 60%; width: 6px; height: 35%; }
+
+        /* Route Line - 虚线连接 */
+        .route-line {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            pointer-events: none;
+        }
+        .route-line svg {
+            width: 100%;
+            height: 100%;
+        }
+        .route-line path {
+            fill: none;
+            stroke: var(--primary);
+            stroke-width: 4;
+            stroke-dasharray: 12 8;
+            stroke-linecap: round;
+            opacity: 0.7;
+        }
+
+        /* Location Points - 地点标记 */
+        .map-point {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            z-index: 10;
+        }
+        .map-point .marker {
+            width: 52px;
+            height: 52px;
+            border-radius: 50%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            font-size: 22px;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.25);
+            position: relative;
+            border: 3px solid white;
+        }
+        .map-point .marker .number {
+            position: absolute;
+            top: -6px;
+            left: -6px;
+            width: 22px;
+            height: 22px;
+            background: white;
+            border-radius: 50%;
+            font-size: 12px;
+            font-weight: 700;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-main);
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+        .map-point .label {
+            position: absolute;
+            top: 58px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 8px 12px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: 600;
+            white-space: nowrap;
+            box-shadow: 0 3px 12px rgba(0,0,0,0.15);
+            z-index: 11;
+        }
+        .map-point .label::before {
+            content: '';
+            position: absolute;
+            top: -7px;
+            left: 50%;
+            transform: translateX(-50%);
+            border-left: 7px solid transparent;
+            border-right: 7px solid transparent;
+            border-bottom: 7px solid white;
+        }
+        .map-point .label .time {
+            font-size: 10px;
+            color: var(--text-light);
+            font-weight: 400;
+            margin-top: 2px;
+        }
+
+        /* Legend */
+        .legend {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            background: white;
+            border-radius: 12px;
+            padding: 12px 16px;
+            box-shadow: 0 3px 15px rgba(0,0,0,0.1);
+            display: flex;
+            flex-wrap: wrap;
+            gap: 12px;
+            font-size: 11px;
+            max-width: calc(100% - 32px);
+        }
+        .legend-item { display: flex; align-items: center; gap: 5px; }
+        .legend-dot { width: 10px; height: 10px; border-radius: 50%; }
+        .legend-dot.transport { background: var(--primary); }
+        .legend-dot.attraction { background: #E74C3C; }
+        .legend-dot.restaurant { background: #F39C12; }
+        .legend-dot.hotel { background: #9B59B6; }
+
+        /* Real Map - 真实地图 */
+        .real-map {
+            position: absolute;
+            inset: 0;
+            display: none;
+        }
+        .real-map.active { display: block; }
+
+        /* 模拟真实地图背景 */
+        .real-map-bg {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #e8e8e8 0%, #d0d0d0 100%);
+            position: relative;
+            overflow: hidden;
+        }
+        /* 模拟道路网格 */
+        .real-road {
+            position: absolute;
+            background: #c8c8c8;
+        }
+        .real-road.h1 { top: 30%; left: 0; right: 0; height: 20px; }
+        .real-road.h2 { top: 55%; left: 10%; right: 20%; height: 25px; }
+        .real-road.h3 { top: 75%; left: 30%; right: 0; height: 15px; }
+        .real-road.v1 { left: 25%; top: 20%; bottom: 30%; width: 20px; }
+        .real-road.v2 { left: 55%; top: 30%; bottom: 40%; width: 25px; }
+
+        /* 真实地图标记 - 带气泡 */
+        .real-marker {
+            position: absolute;
+            transform: translate(-50%, -100%);
+            cursor: pointer;
+            z-index: 10;
+        }
+        .real-marker .pin {
+            width: 36px;
+            height: 36px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 3px 10px rgba(0,0,0,0.3);
+        }
+        .real-marker .pin i {
+            transform: rotate(45deg);
+            font-size: 16px;
+        }
+        .real-marker .pin .num {
+            position: absolute;
+            top: -2px;
+            left: 16px;
+            background: white;
+            border-radius: 50%;
+            width: 16px;
+            height: 16px;
+            font-size: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+        }
+        .real-marker .bubble {
+            position: absolute;
+            bottom: 40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 6px 10px;
+            border-radius: 8px;
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+        }
+
+        /* Distance Info */
+        .distance-info {
+            position: absolute;
+            top: 16px;
+            left: 16px;
+            background: white;
+            border-radius: 10px;
+            padding: 10px 14px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+            font-size: 12px;
+            display: none;
+        }
+        .distance-info.active { display: block; }
+        .distance-info .label { color: var(--text-secondary); }
+        .distance-info .value { font-weight: 600; color: var(--primary); margin-left: 4px; }
+
+        /* Bottom Panel */
+        .bottom-panel {
+            background: var(--card-bg);
+            border-radius: 20px 20px 0 0;
+            padding: 16px 20px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.08);
+        }
+        .bottom-panel .handle {
+            width: 40px;
+            height: 4px;
+            background: var(--border);
+            border-radius: 2px;
+            margin: 0 auto 16px;
+        }
+        .bottom-panel .title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+        .location-list { display: flex; flex-direction: column; gap: 8px; }
+        .location-list .item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 10px 12px;
+            background: var(--bg);
+            border-radius: 10px;
+        }
+        .location-list .item .num {
+            width: 26px;
+            height: 26px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            font-weight: 600;
+            color: white;
+        }
+        .location-list .item .info { flex: 1; }
+        .location-list .item .name { font-size: 13px; font-weight: 500; }
+        .location-list .item .time { font-size: 11px; color: var(--text-secondary); }
+
+        /* Note: 示意图说明 */
+        .map-note {
+            background: #FFF8E1;
+            border: 1px dashed #FFC107;
+            border-radius: 8px;
+            padding: 10px 14px;
+            margin: 0 16px 16px;
+            font-size: 12px;
+            color: #795548;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .map-note.active { display: flex; }
+        .map-note.hidden { display: none; }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">行程地图</span>
+    </div>
+
+    <!-- Map Toggle -->
+    <div class="map-toggle">
+        <div class="tab active" onclick="switchMapType(this, 'cartoon')">示意图</div>
+        <div class="tab" onclick="switchMapType(this, 'real')">真实地图</div>
+    </div>
+
+    <!-- Map Note -->
+    <div class="map-note active" id="mapNote">
+        <i class="bi bi-info-circle"></i>
+        <span>示意图：方位与真实地图一致，距离已压缩便于浏览</span>
+    </div>
+
+    <!-- Map Container -->
+    <div class="map-container">
+        <!-- Cartoon Map - 示意图 -->
+        <div class="cartoon-map active" id="cartoonMap">
+            <!-- 道路 -->
+            <div class="cartoon-road h1"></div>
+            <div class="cartoon-road h2"></div>
+            <div class="cartoon-road v1"></div>
+            <div class="cartoon-road v2"></div>
+
+            <!-- 路线 -->
+            <div class="route-line">
+                <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                    <!-- 路线: 机场(东北) -> 欢乐谷(东) -> 全聚德(东南) -> 酒店(市中心) -->
+                    <path d="M 25 30 L 42 42 L 58 58 L 72 52" />
+                </svg>
+            </div>
+
+            <!-- 地点1: 首都机场T3 - 北京东北方向 -->
+            <div class="map-point" style="top: 30%; left: 25%;">
+                <div class="marker" style="background: var(--primary);">
+                    <span class="number">1</span>
+                    ✈️
+                </div>
+                <div class="label">
+                    首都机场T3
+                    <div class="time">08:00 到达</div>
+                </div>
+            </div>
+
+            <!-- 地点2: 欢乐谷 - 北京东部 -->
+            <div class="map-point" style="top: 42%; left: 42%;">
+                <div class="marker" style="background: #E74C3C;">
+                    <span class="number">2</span>
+                    🎢
+                </div>
+                <div class="label">
+                    北京欢乐谷
+                    <div class="time">09:30 停留6h</div>
+                </div>
+            </div>
+
+            <!-- 地点3: 全聚德 - 北京东南 -->
+            <div class="map-point" style="top: 58%; left: 58%;">
+                <div class="marker" style="background: #F39C12;">
+                    <span class="number">3</span>
+                    🍽️
+                </div>
+                <div class="label">
+                    全聚德烤鸭店
+                    <div class="time">15:30 停留1h</div>
+                </div>
+            </div>
+
+            <!-- 地点4: 王府半岛酒店 - 北京中心 -->
+            <div class="map-point" style="top: 52%; left: 72%;">
+                <div class="marker" style="background: #9B59B6;">
+                    <span class="number">4</span>
+                    🏨
+                </div>
+                <div class="label">
+                    王府半岛酒店
+                    <div class="time">17:00 入住</div>
+                </div>
+            </div>
+
+            <!-- Legend -->
+            <div class="legend">
+                <div class="legend-item"><span class="legend-dot transport"></span> 交通</div>
+                <div class="legend-item"><span class="legend-dot attraction"></span> 景点</div>
+                <div class="legend-item"><span class="legend-dot restaurant"></span> 餐饮</div>
+                <div class="legend-item"><span class="legend-dot hotel"></span> 酒店</div>
+            </div>
+        </div>
+
+        <!-- Real Map - 真实地图 -->
+        <div class="real-map" id="realMap">
+            <div class="real-map-bg">
+                <!-- 模拟道路 -->
+                <div class="real-road h1"></div>
+                <div class="real-road h2"></div>
+                <div class="real-road h3"></div>
+                <div class="real-road v1"></div>
+                <div class="real-road v2"></div>
+            </div>
+
+            <!-- 真实地图标记 - 位置与示意图一致，但显示实际距离 -->
+            <div class="real-marker" style="top: 32%; left: 28%;">
+                <div class="pin" style="background: var(--primary);">
+                    <i>✈️</i>
+                    <span class="num" style="color: var(--primary);">1</span>
+                </div>
+                <div class="bubble">首都机场T3 · 45km</div>
+            </div>
+            <div class="real-marker" style="top: 44%; left: 40%;">
+                <div class="pin" style="background: #E74C3C;">
+                    <i>🎢</i>
+                    <span class="num" style="color: #E74C3C;">2</span>
+                </div>
+                <div class="bubble">欢乐谷 · 12km</div>
+            </div>
+            <div class="real-marker" style="top: 60%; left: 56%;">
+                <div class="pin" style="background: #F39C12;">
+                    <i>🍽️</i>
+                    <span class="num" style="color: #F39C12;">3</span>
+                </div>
+                <div class="bubble">全聚德 · 8km</div>
+            </div>
+            <div class="real-marker" style="top: 54%; left: 70%;">
+                <div class="pin" style="background: #9B59B6;">
+                    <i>🏨</i>
+                    <span class="num" style="color: #9B59B6;">4</span>
+                </div>
+                <div class="bubble">王府半岛</div>
+            </div>
+
+            <!-- 距离信息 -->
+            <div class="distance-info active" id="distanceInfo">
+                <span class="label">总行程:</span>
+                <span class="value">57公里</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Bottom Panel -->
+    <div class="bottom-panel">
+        <div class="handle"></div>
+        <div class="title">途经地点</div>
+        <div class="location-list">
+            <div class="item">
+                <div class="num" style="background: var(--primary);">1</div>
+                <div class="info">
+                    <div class="name">首都机场T3</div>
+                    <div class="time">08:00 到达</div>
+                </div>
+            </div>
+            <div class="item">
+                <div class="num" style="background: #E74C3C;">2</div>
+                <div class="info">
+                    <div class="name">北京欢乐谷</div>
+                    <div class="time">09:30 停留6h</div>
+                </div>
+            </div>
+            <div class="item">
+                <div class="num" style="background: #F39C12;">3</div>
+                <div class="info">
+                    <div class="name">全聚德烤鸭店</div>
+                    <div class="time">15:30 停留1h</div>
+                </div>
+            </div>
+            <div class="item">
+                <div class="num" style="background: #9B59B6;">4</div>
+                <div class="info">
+                    <div class="name">王府半岛酒店</div>
+                    <div class="time">17:00 入住</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function switchMapType(el, type) {
+            document.querySelectorAll('.map-toggle .tab').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+
+            document.getElementById('cartoonMap').classList.toggle('active', type === 'cartoon');
+            document.getElementById('realMap').classList.toggle('active', type === 'real');
+            document.getElementById('mapNote').classList.toggle('active', type === 'cartoon');
+            document.getElementById('mapNote').classList.toggle('hidden', type !== 'cartoon');
+            document.getElementById('distanceInfo').classList.toggle('active', type === 'real');
+        }
+    </script>
+</body>
+</html>

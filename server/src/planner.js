@@ -51,9 +51,33 @@ function ratingOf(poi) {
   return Number.isFinite(r) ? r : 0;
 }
 
+// 六类归类（与客户端 PoiClassifier 一致）：美食/住宿/游玩/购物/枢纽/其他
+function classifyType(typecode = '', name = '') {
+  if (typecode.startsWith('05')) return 'restaurant';
+  if (typecode.startsWith('10')) return 'hotel';
+  if (typecode.startsWith('06')) return 'shopping';
+  if (typecode.startsWith('11') || typecode.startsWith('14') || typecode.startsWith('08') || typecode.startsWith('1902')) return 'attraction';
+  if (/^(1501|1502|1503|1504)/.test(typecode)) return 'transport';
+  if (!typecode) {
+    if (/机场/.test(name)) return 'transport';
+    if (/火车站|汽车站/.test(name)) return 'transport';
+  }
+  return 'other';
+}
+
+function hubKindOf(typecode = '') {
+  if (typecode.startsWith('1501')) return 'airport';
+  if (typecode.startsWith('1502')) return 'station';
+  if (typecode.startsWith('1503')) return 'port';
+  if (typecode.startsWith('1504')) return 'bus';
+  return null;
+}
+
 function baseStay(poi) {
   const tc = String(poi.typecode || '');
   const name = String(poi.name || '');
+  if (tc === 'rental') return 30; // 租车取车点
+  if (/服务区/.test(name)) return 20; // 休息点
   if (/动物园|乐园|游乐园|野生动物/.test(name) || tc.startsWith('0805')) return 210;
   if (tc.startsWith('1401')) return 100;
   if (tc.startsWith('1101')) return 90;
@@ -244,10 +268,24 @@ function clusterByDay(selected, days, cap) {
   return clusters.slice(0, days).map((c) => c.slice(0, cap + 1));
 }
 
-async function segmentMinutes(from, to, city) {
+async function segmentMinutes(from, to, city, mode = 'transit') {
   const distKm = haversineKm(from, to);
   const walk = distKm * 1000 / 1.25 / 60; // 5km/h
   try {
+    // 自驾类（纯自驾/落地租车）：统一驾车路线
+    if (mode === 'drive') {
+      const data = await amapCall('/v3/direction/driving', {
+        origin: `${from.lng},${from.lat}`,
+        destination: `${to.lng},${to.lat}`,
+        strategy: '0',
+        extensions: 'base',
+      });
+      const p = data?.route?.paths?.[0];
+      const t = parseInt(p?.duration, 10);
+      const d = parseFloat(p?.distance);
+      if (Number.isFinite(t)) return { minutes: Math.max(3, Math.round(t / 60)), mode: 'drive', km: Number.isFinite(d) ? d / 1000 : distKm };
+      return { minutes: Math.max(5, Math.round(distKm / 40 * 60 + 5)), mode: 'drive', km: distKm };
+    }
     if (distKm < 1.5) {
       const data = await amapCall('/v3/direction/walking', {
         origin: `${from.lng},${from.lat}`,
@@ -274,8 +312,52 @@ async function segmentMinutes(from, to, city) {
   return { minutes: Math.max(5, Math.round(est)), mode: walk > 30 ? 'transit' : 'walk', km: distKm };
 }
 
-async function buildDay(dayIndex, dateStr, points, { pace, city, warnings }) {
+// 长距离自驾（>200km）自动找服务区休息点（决策#4）
+async function findRestStop(from, to) {
+  try {
+    const midLng = (from.lng + to.lng) / 2;
+    const midLat = (from.lat + to.lat) / 2;
+    const data = await amapCall('/v3/place/around', {
+      location: `${midLng},${midLat}`,
+      keywords: '服务区',
+      radius: '30000',
+      offset: '5',
+      page: '1',
+      extensions: 'base',
+      sortrule: 'distance',
+    });
+    const pois = (data?.pois || []).map(normalizePoi).filter(Boolean);
+    return pois.length ? pois[0] : null;
+  } catch {
+    return null;
+  }
+}
+
+// 落地租车：找取车点（决策#2：租车点=枢纽子类型 rental）
+async function findRentalHub(city, near) {
+  try {
+    const data = await amapCall('/v3/place/around', {
+      location: `${near.lng},${near.lat}`,
+      keywords: '租车',
+      radius: '10000',
+      offset: '5',
+      page: '1',
+      extensions: 'base',
+      sortrule: 'distance',
+    });
+    const pois = (data?.pois || []).map(normalizePoi).filter(Boolean);
+    if (pois.length) return { ...pois[0], typecode: 'rental' };
+    const text = await queryPois(city, { keywords: '租车' }, 1);
+    const p = text.map(normalizePoi).find(Boolean);
+    return p ? { ...p, typecode: 'rental' } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripMode = 'pureTransit' }) {
   if (!points.length) return { date: dateStr, dayNumber: dayIndex + 1, locations: [] };
+  const driveMode = tripMode === 'pureDrive' || tripMode === 'transitPlusRental';
   const ordered = tourOrder(points);
   let clock = START_CLOCK[pace];
   const locations = [];
@@ -287,7 +369,7 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings }) {
     if (travel) {
       clock += travel.minutes;
     }
-    const stay = Math.round((baseStay({ typecode: poi.typecode || '', name: poi.name }) * STAY_FACTOR[pace]) / 15) * 15;
+    const stay = extra.stayOverride ?? Math.round((baseStay({ typecode: poi.typecode || '', name: poi.name }) * STAY_FACTOR[pace]) / 15) * 15;
     const arrival = clock;
     const closeMin = toMin(poi.closeTime);
     if (closeMin !== null && arrival + stay > closeMin) {
@@ -306,7 +388,18 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings }) {
   };
 
   for (const poi of ordered) {
-    const travel = prev ? await segmentMinutes(prev, poi, city) : null;
+    let travel = prev ? await segmentMinutes(prev, poi, city, driveMode ? 'drive' : 'transit') : null;
+    // 长距离自驾（>200km）插入服务区休息点（决策#4）
+    if (travel && driveMode && travel.km > 200) {
+      const rest = await findRestStop(prev, poi);
+      if (rest) {
+        const origKm = travel.km;
+        await pushLoc(rest, { minutes: Math.round(travel.minutes / 2), mode: 'drive', km: travel.km / 2 }, { stayOverride: 20 });
+        warnings.push(`第${dayIndex + 1}天长距离自驾(${Math.round(origKm)}km)，已在中途插入「${rest.name}」休息20分钟`);
+        travel = { minutes: Math.ceil(travel.minutes / 2), mode: 'drive', km: travel.km / 2 };
+        prev = rest;
+      }
+    }
     if (!lunchDone && clock >= mealLimit.lunch - 60) {
       const meal = await findNearbyRestaurant(prev ? prev.lng : poi.lng, prev ? prev.lat : poi.lat, Math.max(clock, 12 * 60));
       if (meal) {
@@ -344,7 +437,8 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
     longitude: poi.lng,
     city: poi.city,
     district: poi.district,
-    type: extra.isMeal ? 'restaurant' : (poi.type === 'restaurant' ? 'restaurant' : 'attraction'),
+    type: extra.isMeal ? 'restaurant' : classifyType(poi.typecode, poi.name),
+    hubKind: poi.typecode === 'rental' ? 'rental' : hubKindOf(poi.typecode),
     stayMinutes: stay,
     transportMinutes: travel ? travel.minutes : null,
     transportMode: travel ? travel.mode : null,
@@ -390,6 +484,7 @@ export async function generateTrip(input) {
   if (!city) { const e = new Error('请填写目的地城市'); e.status = 400; e.expose = true; throw e; }
   const days = Math.min(10, Math.max(1, parseInt(input.days, 10) || 3));
   const pace = ['relaxed', 'normal', 'packed'].includes(input.pace) ? input.pace : 'normal';
+  const tripMode = ['pureDrive', 'pureTransit', 'transitPlusRental'].includes(input.tripMode) ? input.tripMode : 'pureTransit';
   const interestKeys = (Array.isArray(input.interests) && input.interests.filter((k) => INTERESTS[k]).length
     ? input.interests.filter((k) => INTERESTS[k])
     : ['nature', 'culture']);
@@ -434,10 +529,21 @@ export async function generateTrip(input) {
   }
   if (!groups) groups = clusterByDay(selected, days, cap);
 
+  // 落地租车：第1天首位插入取车点（枢纽子类型 rental，决策#2）
+  if (tripMode === 'transitPlusRental' && groups[0]?.length) {
+    const rental = await findRentalHub(city, groups[0][0]);
+    if (rental) {
+      groups[0].unshift({ ...rental, typecode: 'rental', rating: 0 });
+      warnings.push(`已插入取车点「${rental.name}」，取车后同城均按自驾计算`);
+    } else {
+      warnings.push('未找到合适租车点，请到达后自行安排取车');
+    }
+  }
+
   const dayResults = [];
   for (let i = 0; i < days; i++) {
     const pts = (groups[i] || []).map((p) => ({ ...p, _must: mustIds.has(p.id) }));
-    dayResults.push(await buildDay(i, addDays(startDate, i), pts, { pace, city, warnings }));
+    dayResults.push(await buildDay(i, addDays(startDate, i), pts, { pace, city, warnings, tripMode }));
   }
 
   const totalPlaces = dayResults.reduce((s, d) => s + d.locations.filter((l) => l.type === 'attraction').length, 0);
@@ -446,9 +552,10 @@ export async function generateTrip(input) {
       name: `${city.replace(/(市|地区|自治州)$/,'')}${days}日游`,
       startDate,
       endDate: addDays(startDate, days - 1),
+      tripMode,
       days: dayResults,
     },
-    stats: { totalPlaces, days, source, pace },
+    stats: { totalPlaces, days, source, pace, tripMode },
     warnings,
   };
 }

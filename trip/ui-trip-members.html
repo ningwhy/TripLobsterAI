@@ -1,0 +1,438 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>成员管理 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+            --success: #2ECC71;
+            --warning: #FF9800;
+            --danger: #E74C3C;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+        }
+
+        /* Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+
+        /* Trip Info */
+        .trip-info {
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            margin: 16px;
+            border-radius: 12px;
+            padding: 16px;
+            color: white;
+        }
+        .trip-info .name { font-size: 18px; font-weight: 600; margin-bottom: 4px; }
+        .trip-info .date { font-size: 13px; opacity: 0.9; }
+
+        /* Role Tabs */
+        .role-tabs {
+            background: var(--card-bg);
+            display: flex;
+            padding: 4px;
+            margin: 0 16px 12px;
+            border-radius: 12px;
+        }
+        .role-tab {
+            flex: 1;
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .role-tab.active { background: var(--primary); color: white; }
+        .role-tab:not(.active) { color: var(--text-secondary); }
+
+        /* Members List */
+        .members-list {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+
+        .member-item {
+            display: flex;
+            align-items: center;
+            padding: 14px 16px;
+            border-bottom: 1px solid var(--border);
+            position: relative;
+        }
+        .member-item:last-child { border-bottom: none; }
+
+        .member-avatar {
+            width: 48px;
+            height: 48px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 18px;
+            font-weight: 600;
+            margin-right: 12px;
+            position: relative;
+            flex-shrink: 0;
+        }
+        .member-avatar.admin {
+            background: linear-gradient(135deg, #667eea, #764ba2);
+        }
+        .member-avatar.member {
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+        }
+        .member-avatar .badge {
+            position: absolute;
+            bottom: -2px;
+            right: -2px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--success);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            border: 2px solid white;
+        }
+
+        .member-info { flex: 1; }
+        .member-info .name { font-size: 15px; font-weight: 600; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
+        .member-info .role-tag {
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-weight: 500;
+        }
+        .member-info .role-tag.admin { background: var(--primary-light); color: var(--primary); }
+        .member-info .role-tag.member { background: #F5F5F5; color: var(--text-secondary); }
+        .member-info .meta { font-size: 12px; color: var(--text-light); }
+
+        .member-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .member-actions .btn {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            font-size: 14px;
+        }
+        .member-actions .btn-edit { background: var(--primary-light); color: var(--primary); }
+        .member-actions .btn-delete { background: #FFEBEE; color: var(--danger); }
+
+        /* Stats Card */
+        .stats-card {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .stats-card .title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+        .stats-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+        .stat-item { text-align: center; }
+        .stat-item .value { font-size: 20px; font-weight: 700; color: var(--primary); }
+        .stat-item .label { font-size: 11px; color: var(--text-light); }
+
+        /* Invite Section */
+        .invite-section {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .invite-section .title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
+        .invite-link {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            background: var(--bg);
+            padding: 12px;
+            border-radius: 8px;
+            margin-bottom: 12px;
+        }
+        .invite-link input {
+            flex: 1;
+            border: none;
+            background: none;
+            font-size: 13px;
+            color: var(--text-secondary);
+        }
+        .invite-link .copy-btn {
+            color: var(--primary);
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .invite-channels { display: flex; gap: 8px; }
+        .invite-channels .channel {
+            flex: 1;
+            padding: 10px;
+            border-radius: 8px;
+            text-align: center;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .invite-channels .channel.wechat { background: #07C160; color: white; }
+        .invite-channels .channel.moments { background: #FF9500; color: white; }
+        .invite-channels .channel.qr { background: var(--primary); color: white; }
+
+        /* Permissions Info */
+        .permissions-card {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .permissions-card .title { font-size: 14px; font-weight: 600; padding: 14px 16px; border-bottom: 1px solid var(--border); }
+        .permission-item {
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .permission-item:last-child { border-bottom: none; }
+        .permission-item .icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+        }
+        .permission-item .icon.admin { background: var(--primary-light); color: var(--primary); }
+        .permission-item .icon.member { background: #F5F5F5; color: var(--text-secondary); }
+        .permission-item .info { flex: 1; }
+        .permission-item .info .name { font-size: 13px; font-weight: 500; }
+        .permission-item .info .desc { font-size: 11px; color: var(--text-light); }
+        .permission-item .check {
+            color: var(--success);
+            font-size: 16px;
+        }
+
+        /* Bottom Button */
+        .bottom-button {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 16px;
+            background: var(--card-bg);
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+        }
+        .bottom-button button {
+            width: 100%;
+            padding: 14px;
+            border-radius: 24px;
+            border: none;
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            color: white;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">成员管理</span>
+    </div>
+
+    <!-- Trip Info -->
+    <div class="trip-info">
+        <div class="name">北京3日游</div>
+        <div class="date">02/21 - 02/23 · 3天</div>
+    </div>
+
+    <!-- Role Tabs -->
+    <div class="role-tabs">
+        <div class="role-tab active" onclick="switchRole(this, 'all')">全部成员</div>
+        <div class="role-tab" onclick="switchRole(this, 'admin')">管理员</div>
+        <div class="role-tab" onclick="switchRole(this, 'member')">成员</div>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-card">
+        <div class="title">贡献统计</div>
+        <div class="stats-grid">
+            <div class="stat-item">
+                <div class="value">3</div>
+                <div class="label">总人数</div>
+            </div>
+            <div class="stat-item">
+                <div class="value">55</div>
+                <div class="label">照片</div>
+            </div>
+            <div class="stat-item">
+                <div class="value">7</div>
+                <div class="label">地点</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Members List -->
+    <div class="members-list">
+        <!-- Admin -->
+        <div class="member-item">
+            <div class="member-avatar admin">
+                明
+                <div class="badge"><i class="bi bi-check"></i></div>
+            </div>
+            <div class="member-info">
+                <div class="name">
+                    张明
+                    <span class="role-tag admin">管理员</span>
+                </div>
+                <div class="meta">创建者 · 上次更新：2小时前</div>
+            </div>
+            <div class="member-actions">
+                <button class="btn btn-edit" onclick="editMember('张明')"><i class="bi bi-pencil"></i></button>
+            </div>
+        </div>
+
+        <!-- Member 1 -->
+        <div class="member-item">
+            <div class="member-avatar member">李</div>
+            <div class="member-info">
+                <div class="name">
+                    李雪
+                    <span class="role-tag member">成员</span>
+                </div>
+                <div class="meta">上次更新：昨天</div>
+            </div>
+            <div class="member-actions">
+                <button class="btn btn-edit" onclick="editMember('李雪')"><i class="bi bi-pencil"></i></button>
+                <button class="btn btn-delete" onclick="removeMember('李雪')"><i class="bi bi-trash"></i></button>
+            </div>
+        </div>
+
+        <!-- Member 2 -->
+        <div class="member-item">
+            <div class="member-avatar member">王</div>
+            <div class="member-info">
+                <div class="name">
+                    王强
+                    <span class="role-tag member">成员</span>
+                </div>
+                <div class="meta">上次更新：3天前</div>
+            </div>
+            <div class="member-actions">
+                <button class="btn btn-edit" onclick="editMember('王强')"><i class="bi bi-pencil"></i></button>
+                <button class="btn btn-delete" onclick="removeMember('王强')"><i class="bi bi-trash"></i></button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Invite Section -->
+    <div class="invite-section">
+        <div class="title"><i class="bi bi-person-plus"></i> 邀请新成员</div>
+        <div class="invite-link">
+            <i class="bi bi-link-45deg" style="color: var(--primary);"></i>
+            <input type="text" value="https://trip.app/invite/abc123" readonly>
+            <span class="copy-btn" onclick="copyLink()">复制</span>
+        </div>
+        <div class="invite-channels">
+            <div class="channel wechat" onclick="shareTo('微信')"><i class="bi bi-chat-dots"></i> 微信</div>
+            <div class="channel moments" onclick="shareTo('朋友圈')"><i class="bi bi-images"></i> 朋友圈</div>
+            <div class="channel qr" onclick="showQR()"><i class="bi bi-qr-code"></i> 二维码</div>
+        </div>
+    </div>
+
+    <!-- Permissions -->
+    <div class="permissions-card">
+        <div class="title">权限说明</div>
+        <div class="permission-item">
+            <div class="icon admin"><i class="bi bi-pencil-square"></i></div>
+            <div class="info">
+                <div class="name">管理员权限</div>
+                <div class="desc">增删改地点、修改行程、邀请成员</div>
+            </div>
+            <div class="check"><i class="bi bi-check-circle-fill"></i></div>
+        </div>
+        <div class="permission-item">
+            <div class="icon member"><i class="bi bi-eye"></i></div>
+            <div class="info">
+                <div class="name">成员权限</div>
+                <div class="desc">查看行程、上传和共享照片</div>
+            </div>
+            <div class="check"><i class="bi bi-check-circle-fill"></i></div>
+        </div>
+    </div>
+
+    <div style="height: 100px;"></div>
+
+    <!-- Bottom Button -->
+    <div class="bottom-button">
+        <button>+ 添加成员</button>
+    </div>
+
+    <script>
+        function switchRole(el, role) {
+            document.querySelectorAll('.role-tab').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+        }
+
+        function editMember(name) {
+            alert('编辑成员: ' + name + '\n\n可修改：\n• 成员昵称\n• 角色权限');
+        }
+
+        function removeMember(name) {
+            if (confirm('确定要移除成员 ' + name + ' 吗？\n\n移除后该成员将无法查看此行程')) {
+                alert('已移除成员: ' + name);
+            }
+        }
+
+        function copyLink() {
+            alert('链接已复制！\n\n分享给好友即可加入行程');
+        }
+
+        function shareTo(platform) {
+            alert('分享到 ' + platform + '\n\n将打开' + platform + '分享界面');
+        }
+
+        function showQR() {
+            alert('显示二维码\n\n让好友扫码即可加入行程');
+        }
+    </script>
+</body>
+</html>

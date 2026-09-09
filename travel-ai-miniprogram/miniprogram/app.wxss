@@ -1,0 +1,27 @@
+/* app.wxss - 全局样式 */
+page {
+  background-color: #f5f7fa;
+  font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', sans-serif;
+}
+
+.container {
+  padding: 20rpx;
+}
+
+/* 通用按钮 */
+.btn-primary {
+  background: linear-gradient(135deg, #4A90E2, #357ABD);
+  color: #fff;
+  border-radius: 50rpx;
+  font-size: 32rpx;
+  font-weight: 600;
+  padding: 24rpx 0;
+  text-align: center;
+  border: none;
+  box-shadow: 0 8rpx 20rpx rgba(74, 144, 226, 0.4);
+}
+
+.btn-primary:active {
+  opacity: 0.85;
+  transform: scale(0.98);
+}

@@ -1,0 +1,93 @@
+<!-- pages/itinerary/itinerary.wxml - 行程展示页（卡片式） -->
+<view class="container">
+
+  <!-- 顶部信息 -->
+  <view class="header">
+    <view class="trip-title">{{itinerary.title}}</view>
+    <view class="trip-summary">{{itinerary.summary}}</view>
+    <!-- 切换视图按钮 -->
+    <view class="view-switch">
+      <view class="switch-btn {{viewMode == 'card' ? 'active' : ''}}" bindtap="switchView" data-mode="card">📋 卡片</view>
+      <view class="switch-btn {{viewMode == 'map' ? 'active' : ''}}" bindtap="switchView" data-mode="map">🗺 地图</view>
+    </view>
+  </view>
+
+  <!-- 卡片视图 -->
+  <block wx:if="{{viewMode == 'card'}}">
+    
+    <!-- 天数标签 -->
+    <scroll-view scroll-x class="day-tabs-scroll">
+      <view class="day-tabs">
+        <view class="day-tab {{currentDay == index ? 'active' : ''}}"
+              wx:for="{{itinerary.days}}" wx:key="day"
+              bindtap="switchDay" data-index="{{index}}">
+          第{{item.day}}天
+        </view>
+      </view>
+    </scroll-view>
+
+    <!-- 当天行程 -->
+    <view class="day-card" wx:if="{{itinerary.days[currentDay]}}">
+      <view class="day-theme">
+        <text class="day-num">Day {{itinerary.days[currentDay].day}}</text>
+        <text class="day-theme-text">{{itinerary.days[currentDay].theme}}</text>
+      </view>
+
+      <!-- 活动列表 -->
+      <view class="timeline">
+        <view class="timeline-item" wx:for="{{itinerary.days[currentDay].activities}}" wx:key="*this" wx:for-item="activity">
+          
+          <!-- 时间轴线 -->
+          <view class="timeline-left">
+            <view class="time-text">{{activity.time}}</view>
+            <view class="timeline-dot {{activity.type}}"></view>
+            <view class="timeline-line" wx:if="{{index < itinerary.days[currentDay].activities.length - 1}}"></view>
+          </view>
+
+          <!-- 活动卡片 -->
+          <view class="activity-card {{activity.type}}">
+            <view class="activity-header">
+              <text class="activity-icon">{{typeIcons[activity.type] || '📍'}}</text>
+              <text class="activity-title">{{activity.title}}</text>
+            </view>
+            <view class="activity-desc">{{activity.desc}}</view>
+            <view class="activity-footer" wx:if="{{activity.tips || activity.cost}}">
+              <text class="activity-tips" wx:if="{{activity.tips}}">💡 {{activity.tips}}</text>
+              <text class="activity-cost" wx:if="{{activity.cost}}">💰 {{activity.cost}}</text>
+            </view>
+          </view>
+
+        </view>
+      </view>
+    </view>
+
+    <!-- 底部操作 -->
+    <view class="bottom-actions">
+      <button class="btn-secondary" bindtap="regenerate">🔄 重新生成</button>
+      <button class="btn-primary" bindtap="saveItinerary">💾 保存行程</button>
+    </view>
+
+  </block>
+
+  <!-- 地图视图 -->
+  <block wx:if="{{viewMode == 'map'}}">
+    <view class="map-placeholder">
+      <view class="map-tip">🗺</view>
+      <view class="map-tip-text">地图视图</view>
+      <view class="map-tip-sub">行程地图展示即将上线</view>
+      <view class="map-day-list">
+        <view class="map-day-item" wx:for="{{itinerary.days}}" wx:key="day">
+          <view class="map-day-num">Day {{item.day}}</view>
+          <view class="map-day-theme">{{item.theme}}</view>
+          <view class="map-spots">
+            <text wx:for="{{item.activities}}" wx:key="*this" wx:for-item="a" 
+                  wx:if="{{a.type == 'attraction' || a.type == 'food'}}">
+              📍{{a.title}}  
+            </text>
+          </view>
+        </view>
+      </view>
+    </view>
+  </block>
+
+</view>

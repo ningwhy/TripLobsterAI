@@ -1,0 +1,597 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>行程预览 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+            --hub-border: #FFB74D;
+            --warning: #FF9800;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+        }
+
+        /* Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+        .app-header .share-btn { color: var(--primary); font-size: 18px; }
+        .app-header .members-btn { color: var(--text-secondary); font-size: 14px; display: flex; align-items: center; gap: 4px; }
+
+        /* Date Tabs */
+        .date-tabs {
+            background: var(--card-bg);
+            padding: 12px 16px 0;
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            border-bottom: 1px solid var(--border);
+        }
+        .date-tabs::-webkit-scrollbar { display: none; }
+        .date-tab {
+            padding: 10px 16px;
+            font-size: 13px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-bottom: 2px solid transparent;
+            white-space: nowrap;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 2px;
+        }
+        .date-tab .day-num { font-size: 16px; font-weight: 600; }
+        .date-tab .weekday { font-size: 11px; }
+        .date-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+        .date-tab .location-count {
+            font-size: 10px;
+            background: var(--primary-light);
+            padding: 2px 6px;
+            border-radius: 10px;
+            margin-top: 2px;
+        }
+
+        /* Members Section */
+        .members-section {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .members-header {
+            padding: 14px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            border-bottom: 1px solid var(--border);
+        }
+        .members-header .title { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 8px; }
+        .members-header .title i { color: var(--primary); }
+        .members-header .add-btn { font-size: 13px; color: var(--primary); cursor: pointer; }
+
+        .member-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+        }
+        .member-item:last-child { border-bottom: none; }
+        .member-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 16px;
+            margin-right: 12px;
+            position: relative;
+        }
+        .member-avatar.admin::after {
+            content: '管理员';
+            position: absolute;
+            bottom: -8px;
+            left: 50%;
+            transform: translateX(-50%);
+            font-size: 9px;
+            background: var(--primary);
+            color: white;
+            padding: 1px 4px;
+            border-radius: 4px;
+            white-space: nowrap;
+        }
+        .member-info { flex: 1; }
+        .member-info .name { font-size: 14px; font-weight: 500; }
+        .member-info .role { font-size: 11px; color: var(--text-light); }
+        .member-photos { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; }
+
+        /* Active Day Highlight */
+        .day-section { display: block; }
+
+        /* Sticky Date Tabs */
+        .date-tabs.sticky {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            z-index: 200;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            padding-top: 8px;
+        }
+        .date-tabs.sticky .date-tab {
+            padding: 6px 12px;
+        }
+        .date-tabs.sticky .location-count {
+            display: none;
+        }
+        .date-tabs.sticky .day-num {
+            font-size: 14px;
+        }
+
+        /* Trip Summary */
+        .trip-summary {
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            margin: 16px;
+            border-radius: 16px;
+            padding: 20px;
+            color: white;
+        }
+        .trip-summary .trip-name { font-size: 22px; font-weight: 700; margin-bottom: 4px; }
+        .trip-summary .trip-date { font-size: 14px; opacity: 0.9; margin-bottom: 16px; }
+        .trip-summary .stats { display: flex; gap: 20px; }
+        .trip-summary .stat { text-align: center; }
+        .trip-summary .stat-value { font-size: 20px; font-weight: 700; }
+        .trip-summary .stat-label { font-size: 12px; opacity: 0.8; }
+
+        /* Overview Card */
+        .overview-card {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            padding: 16px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .overview-card .title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .overview-card .title i { color: var(--primary); }
+        .overview-card .stats { display: flex; justify-content: space-around; }
+        .overview-card .stat { text-align: center; }
+        .overview-card .stat-value { font-size: 18px; font-weight: 700; color: var(--primary); }
+        .overview-card .stat-label { font-size: 12px; color: var(--text-secondary); }
+
+        /* Timeline Card */
+        .timeline-card { background: var(--card-bg); margin: 0 16px 16px; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .timeline-card .title { font-size: 14px; font-weight: 600; margin-bottom: 16px; display: flex; align-items: center; gap: 8px; }
+        .timeline-card .title i { color: var(--primary); }
+
+        .day-section { margin-bottom: 20px; }
+        .day-section:last-child { margin-bottom: 0; }
+        .day-header { font-size: 13px; font-weight: 600; color: var(--text-secondary); margin-bottom: 10px; padding-left: 8px; border-left: 3px solid var(--primary); }
+
+        .timeline-item { display: flex; gap: 10px; margin-bottom: 12px; }
+        .timeline-item:last-child { margin-bottom: 0; }
+        .time-column { width: 50px; text-align: right; flex-shrink: 0; font-size: 13px; }
+        .time-column .time { font-weight: 600; }
+        .time-column .duration { font-size: 11px; color: var(--text-light); }
+
+        .timeline-line { width: 2px; background: var(--primary); position: relative; flex-shrink: 0; }
+        .timeline-line::before { content: ''; width: 8px; height: 8px; background: var(--primary); border-radius: 50%; position: absolute; top: 4px; left: -3px; }
+        .timeline-line.hub { background: var(--hub-border); }
+        .timeline-line.hub::before { background: var(--hub-border); }
+
+        .location-content { flex: 1; background: var(--bg); border-radius: 8px; padding: 10px; }
+        .location-content.auto-added { background: #FFF3E0; border: 1px dashed var(--hub-border); }
+        .location-content .name { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+        .location-content .type-tag { font-size: 10px; padding: 1px 6px; border-radius: 3px; color: white; display: inline-block; margin-bottom: 4px; }
+        .location-content .meta { font-size: 11px; color: var(--text-secondary); }
+
+        .transport-item { display: flex; align-items: center; gap: 8px; padding: 6px 10px; background: var(--primary-light); border-radius: 6px; margin: 8px 0 8px 60px; font-size: 12px; color: var(--text-secondary); }
+        .transport-item i { color: var(--primary); }
+
+        /* Location Photos - 地点下方照片 */
+        .location-photos {
+            margin: 8px 0 0 60px;
+            background: var(--card-bg);
+            border-radius: 8px;
+            padding: 10px;
+            border: 1px solid var(--border);
+        }
+        .location-photos .header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .location-photos .header .label { font-size: 11px; color: var(--text-light); display: flex; align-items: center; gap: 4px; }
+        .location-photos .header .view-all { font-size: 11px; color: var(--primary); cursor: pointer; }
+        .photo-thumb-grid { display: flex; gap: 4px; overflow: hidden; }
+        .photo-thumb-grid .thumb {
+            width: 56px;
+            height: 56px;
+            border-radius: 6px;
+            overflow: hidden;
+            flex-shrink: 0;
+            position: relative;
+        }
+        .photo-thumb-grid .thumb img { width: 100%; height: 100%; object-fit: cover; }
+        .photo-thumb-grid .thumb.more {
+            background: var(--bg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Cost Card */
+        .cost-card { background: var(--card-bg); margin: 0 16px 16px; border-radius: 12px; padding: 16px; box-shadow: 0 2px 8px rgba(0,0,0,0.08); }
+        .cost-card .title { font-size: 14px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+        .cost-card .title i { color: var(--warning); }
+        .cost-item { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 14px; }
+        .cost-item:last-child { border-bottom: none; }
+        .cost-item .label { color: var(--text-secondary); }
+        .cost-item .value { font-weight: 500; }
+        .cost-item.total { border-top: 2px solid var(--border); margin-top: 8px; padding-top: 12px; font-size: 16px; font-weight: 700; }
+        .cost-item.total .value { color: #FF6600; }
+
+        /* Type Colors */
+        .type-transport { background: var(--primary); }
+        .type-hotel { background: #9B59B6; }
+        .type-attraction { background: #E74C3C; }
+        .type-restaurant { background: #F39C12; }
+        .type-shopping { background: #2ECC71; }
+
+        /* Bottom Button */
+        .bottom-button {
+            position: fixed; bottom: 0; left: 0; right: 0;
+            padding: 16px; background: var(--card-bg);
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+            display: flex;
+            gap: 12px;
+        }
+        .bottom-button button {
+            flex: 1; padding: 14px; border-radius: 24px; border: none;
+            font-size: 16px; font-weight: 600; cursor: pointer;
+        }
+        .bottom-button .btn-map {
+            background: var(--card-bg);
+            border: 2px solid var(--primary);
+            color: var(--primary);
+        }
+        .bottom-button .btn-generate {
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">行程预览</span>
+        <div style="display: flex; gap: 12px;">
+            <span class="members-btn" onclick="showMembers()"><i class="bi bi-people-fill"></i> 3人</span>
+            <span class="share-btn" onclick="shareTrip()"><i class="bi bi-share"></i></span>
+        </div>
+    </div>
+
+    <!-- Date Tabs -->
+    <div class="date-tabs">
+        <div class="date-tab active" onclick="selectDay(this, 1)">
+            <span class="day-num">21</span>
+            <span class="weekday">周五</span>
+            <span class="location-count">4地点</span>
+        </div>
+        <div class="date-tab" onclick="selectDay(this, 2)">
+            <span class="day-num">22</span>
+            <span class="weekday">周六</span>
+            <span class="location-count">3地点</span>
+        </div>
+        <div class="date-tab" onclick="selectDay(this, 3)">
+            <span class="day-num">23</span>
+            <span class="weekday">周日</span>
+            <span class="location-count">2地点</span>
+        </div>
+    </div>
+
+    <script>
+        function shareTrip() {
+            alert('分享行程\n\n支持生成海报图片、链接分享给好友');
+        }
+        function showMembers() {
+            alert('成员管理\n\n• 管理员：可增删改地点\n• 成员：可查看行程和共享照片');
+        }
+        function selectDay(el, day) {
+            // 点击日期标签，滚动到对应位置
+            const target = document.getElementById('day' + day);
+            if (target) {
+                // 计算偏移量，考虑固定头部的距离
+                const offsetTop = target.offsetTop - 70;
+                window.scrollTo({ top: offsetTop, behavior: 'smooth' });
+            }
+        }
+
+        // 滚动监听 - 动态更新日期标签选中状态
+        window.addEventListener('scroll', function() {
+            const tabs = document.querySelectorAll('.date-tab');
+            const sections = document.querySelectorAll('.day-section');
+
+            let current = '';
+            sections.forEach(section => {
+                const sectionTop = section.offsetTop;
+                if (pageYOffset >= sectionTop - 100) {
+                    current = section.id;
+                }
+            });
+
+            tabs.forEach(tab => {
+                tab.classList.remove('active');
+                if (tab.getAttribute('onclick').includes(current.replace('day', ''))) {
+                    tab.classList.add('active');
+                }
+            });
+
+            // 日期标签 sticky 效果
+            const dateTabs = document.querySelector('.date-tabs');
+            if (pageYOffset > 100) {
+                dateTabs.classList.add('sticky');
+            } else {
+                dateTabs.classList.remove('sticky');
+            }
+        });
+    </script>
+
+    <!-- Trip Summary -->
+    <div class="trip-summary">
+        <div class="trip-name">北京3日游</div>
+        <div class="trip-date">02/21 - 02/23 · 2人</div>
+        <div class="stats">
+            <div class="stat"><div class="stat-value">3</div><div class="stat-label">天</div></div>
+            <div class="stat"><div class="stat-value">7</div><div class="stat-label">地点</div></div>
+            <div class="stat"><div class="stat-value">128</div><div class="stat-label">公里</div></div>
+            <div class="stat"><div class="stat-value">8.5</div><div class="stat-label">小时</div></div>
+        </div>
+    </div>
+
+    <!-- Overview -->
+    <div class="overview-card">
+        <div class="title"><i class="bi bi-calendar-check"></i> 行程概览</div>
+        <div class="stats">
+            <div class="stat"><div class="stat-value">3</div><div class="stat-label">天</div></div>
+            <div class="stat"><div class="stat-value">7</div><div class="stat-label">地点</div></div>
+            <div class="stat"><div class="stat-value">128km</div><div class="stat-label">总距离</div></div>
+            <div class="stat"><div class="stat-value">8.5h</div><div class="stat-label">游玩时长</div></div>
+        </div>
+    </div>
+
+    <!-- Members Section -->
+    <div class="members-section">
+        <div class="members-header">
+            <span class="title"><i class="bi bi-people-fill"></i> 同行成员</span>
+            <span class="add-btn" onclick="addMember()">+ 添加</span>
+        </div>
+        <div class="member-item">
+            <div class="member-avatar admin">我</div>
+            <div class="member-info">
+                <div class="name">张明</div>
+                <div class="role">创建者 · 管理员</div>
+            </div>
+            <div class="member-photos"><i class="bi bi-images"></i> 25张</div>
+        </div>
+        <div class="member-item">
+            <div class="member-avatar">李</div>
+            <div class="member-info">
+                <div class="name">李雪</div>
+                <div class="role">成员</div>
+            </div>
+            <div class="member-photos"><i class="bi bi-images"></i> 18张</div>
+        </div>
+        <div class="member-item">
+            <div class="member-avatar">王</div>
+            <div class="member-info">
+                <div class="name">王强</div>
+                <div class="role">成员</div>
+            </div>
+            <div class="member-photos"><i class="bi bi-images"></i> 12张</div>
+        </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="timeline-card">
+        <div class="title"><i class="bi bi-clock-history"></i> 详细时间线</div>
+
+        <div class="day-section" id="day1">
+            <div class="day-header">第1天 · 2月21日 <span style="float:right;font-weight:400;font-size:12px;color:var(--text-light);">已安排 9h30m</span></div>
+
+            <!-- 地点1: 首都机场 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">08:00</div></div>
+                <div class="timeline-line"></div>
+                <div class="location-content">
+                    <span class="type-tag type-transport">交通</span>
+                    <div class="name">首都机场T3</div>
+                    <div class="meta">到达</div>
+                </div>
+            </div>
+            <div class="transport-item"><i class="bi bi-car-front-fill"></i> 打车 1h / 45km</div>
+
+            <!-- 地点2: 欢乐谷 + 照片 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">09:30</div><div class="duration">停留6h</div></div>
+                <div class="timeline-line"></div>
+                <div class="location-content">
+                    <span class="type-tag type-attraction">景点</span>
+                    <div class="name">北京欢乐谷</div>
+                    <div class="meta">营业 09:00-18:00</div>
+                </div>
+            </div>
+            <div class="location-photos">
+                <div class="header">
+                    <span class="label"><i class="bi bi-images"></i> 12张照片</span>
+                    <span class="view-all">查看全部 ></span>
+                </div>
+                <div class="photo-thumb-grid">
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=1" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=2" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=3" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=4" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=5" alt=""></div>
+                </div>
+            </div>
+
+            <div class="transport-item"><i class="bi bi-car-front-fill"></i> 打车 30m / 12km</div>
+
+            <!-- 地点3: 全聚德 + 照片 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">15:30</div><div class="duration">停留1h</div></div>
+                <div class="timeline-line"></div>
+                <div class="location-content">
+                    <span class="type-tag type-restaurant">餐饮</span>
+                    <div class="name">全聚德烤鸭店(王府井店)</div>
+                    <div class="meta">营业 11:00-21:00</div>
+                </div>
+            </div>
+            <div class="location-photos">
+                <div class="header">
+                    <span class="label"><i class="bi bi-images"></i> 8张照片</span>
+                    <span class="view-all">查看全部 ></span>
+                </div>
+                <div class="photo-thumb-grid">
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=10" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=11" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=12" alt=""></div>
+                </div>
+            </div>
+
+            <!-- 地点4: 酒店 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">17:00</div><div class="duration">入住</div></div>
+                <div class="timeline-line"></div>
+                <div class="location-content">
+                    <span class="type-tag type-hotel">酒店</span>
+                    <div class="name">北京王府半岛酒店</div>
+                    <div class="meta">住宿</div>
+                </div>
+            </div>
+            <div class="location-photos">
+                <div class="header">
+                    <span class="label"><i class="bi bi-images"></i> 5张照片</span>
+                    <span class="view-all">查看全部 ></span>
+                </div>
+                <div class="photo-thumb-grid">
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=20" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=21" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=22" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=23" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=24" alt=""></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="day-section" id="day2">
+            <div class="day-header">第2天 · 2月22日 <span style="float:right;font-weight:400;font-size:12px;color:var(--text-light);">已安排 5h</span></div>
+
+            <!-- 交通枢纽: 北京站 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">09:00</div></div>
+                <div class="timeline-line hub"></div>
+                <div class="location-content auto-added">
+                    <span class="type-tag type-transport">交通</span>
+                    <div class="name">北京站</div>
+                    <div class="meta">系统添加 · 乘高铁G123</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Day 3 -->
+        <div class="day-section" id="day3">
+            <div class="day-header">第3天 · 2月23日 <span style="float:right;font-weight:400;font-size:12px;color:var(--text-light);">已安排 4h</span></div>
+
+            <!-- 地点: 颐和园 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">09:00</div><div class="duration">停留3h</div></div>
+                <div class="timeline-line"></div>
+                <div class="location-content">
+                    <span class="type-tag type-attraction">景点</span>
+                    <div class="name">颐和园</div>
+                    <div class="meta">营业 06:30-18:00</div>
+                </div>
+            </div>
+            <div class="location-photos">
+                <div class="header">
+                    <span class="label"><i class="bi bi-images"></i> 15张照片</span>
+                    <span class="view-all">查看全部 ></span>
+                </div>
+                <div class="photo-thumb-grid">
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=30" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=31" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=32" alt=""></div>
+                    <div class="thumb"><img src="https://picsum.photos/200/200?random=33" alt=""></div>
+                </div>
+            </div>
+
+            <!-- 交通: 前往机场 -->
+            <div class="transport-item"><i class="bi bi-car-front-fill"></i> 打车 1h / 40km</div>
+
+            <!-- 地点: 首都机场 -->
+            <div class="timeline-item">
+                <div class="time-column"><div class="time">14:00</div></div>
+                <div class="timeline-line hub"></div>
+                <div class="location-content auto-added">
+                    <span class="type-tag type-transport">交通</span>
+                    <div class="name">首都机场T3</div>
+                    <div class="meta">返程</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Cost -->
+    <div class="cost-card">
+        <div class="title"><i class="bi bi-credit-card"></i> 费用预估</div>
+        <div class="cost-item"><span class="label">机票 (去程)</span><span class="value">¥1,360</span></div>
+        <div class="cost-item"><span class="label">火车票 (返程)</span><span class="value">¥1,106</span></div>
+        <div class="cost-item"><span class="label">酒店 (2晚)</span><span class="value">¥2,400</span></div>
+        <div class="cost-item"><span class="label">景点门票</span><span class="value">¥350</span></div>
+        <div class="cost-item total"><span class="label">合计</span><span class="value">¥5,716</span></div>
+    </div>
+
+    <div style="height: 100px;"></div>
+
+    <!-- Bottom Button -->
+    <div class="bottom-button">
+        <button class="btn-map"><i class="bi bi-map"></i> 查看地图</button>
+        <button class="btn-generate">生成行程</button>
+    </div>
+</body>
+</html>

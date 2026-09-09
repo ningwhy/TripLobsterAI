@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>选择交通方式 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+            --success: #2ECC71;
+            --hub-border: #FFB74D;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding-bottom: 80px;
+        }
+
+        /* Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+
+        /* Route Card */
+        .route-card {
+            background: var(--card-bg);
+            padding: 16px;
+            margin: 12px;
+            border-radius: 12px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .route-card .route-path {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 12px;
+            margin-bottom: 8px;
+        }
+        .route-card .city {
+            font-size: 16px;
+            font-weight: 600;
+        }
+        .route-card .arrow {
+            color: var(--text-light);
+            font-size: 20px;
+        }
+        .route-card .route-label {
+            text-align: center;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Transport Options */
+        .transport-section { padding: 0 12px; }
+        .transport-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .transport-options {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            overflow-x: auto;
+            padding-bottom: 4px;
+        }
+        .transport-option {
+            flex: 1;
+            min-width: 70px;
+            padding: 12px 8px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+            background: var(--card-bg);
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .transport-option.active {
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+        .transport-option .icon {
+            font-size: 24px;
+            margin-bottom: 4px;
+        }
+        .transport-option .name {
+            font-size: 12px;
+            font-weight: 500;
+        }
+        .transport-option .time {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        /* Selected Info */
+        .selected-info {
+            background: var(--primary-light);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 0 12px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--primary);
+        }
+
+        /* Hub Info */
+        .hub-info {
+            background: #FFF3E0;
+            border: 1px dashed var(--hub-border);
+            border-radius: 12px;
+            padding: 12px;
+            margin: 0 12px 12px;
+        }
+        .hub-info .hub-label {
+            font-size: 12px;
+            color: var(--hub-border);
+            margin-bottom: 10px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .hub-info .hub-list {
+            display: flex;
+            gap: 12px;
+        }
+        .hub-info .hub-item {
+            flex: 1;
+            background: white;
+            border-radius: 8px;
+            padding: 10px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .hub-info .hub-icon {
+            font-size: 20px;
+        }
+        .hub-info .hub-detail {
+            flex: 1;
+        }
+        .hub-info .hub-name {
+            font-size: 13px;
+            font-weight: 500;
+        }
+        .hub-info .hub-meta {
+            font-size: 11px;
+            color: var(--text-light);
+        }
+        .hub-info .hub-time {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--hub-border);
+        }
+
+        /* Flight List */
+        .flight-list { padding: 0 12px; }
+        .flight-list-label {
+            font-size: 14px;
+            font-weight: 600;
+            margin-bottom: 12px;
+        }
+        .flight-card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 14px;
+            margin-bottom: 10px;
+            border: 2px solid var(--border);
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .flight-card:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+        .flight-card.selected {
+            border-color: var(--primary);
+            background: var(--primary-light);
+        }
+
+        .flight-card .header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+        .flight-card .airline {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .flight-card .airline-logo {
+            width: 24px;
+            height: 24px;
+            background: #FF6600;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        .flight-card .flight-number {
+            font-size: 14px;
+            font-weight: 600;
+        }
+        .flight-card .cabin {
+            font-size: 12px;
+            color: var(--text-secondary);
+            background: var(--bg);
+            padding: 2px 8px;
+            border-radius: 4px;
+        }
+
+        .flight-card .times {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+        .flight-card .time-block {
+            text-align: center;
+        }
+        .flight-card .time-block .time {
+            font-size: 18px;
+            font-weight: 600;
+        }
+        .flight-card .time-block .city {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+        .flight-card .time-block .duration {
+            font-size: 11px;
+            color: var(--text-light);
+            text-align: center;
+        }
+        .flight-card .arrow-line {
+            flex: 1;
+            height: 2px;
+            background: var(--border);
+            position: relative;
+            margin: 0 10px;
+        }
+        .flight-card .arrow-line::after {
+            content: '→';
+            position: absolute;
+            right: -4px;
+            top: -8px;
+            color: var(--text-light);
+        }
+
+        .flight-card .footer {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .flight-card .price {
+            font-size: 18px;
+            font-weight: 700;
+            color: #FF6600;
+        }
+        .flight-card .seats {
+            font-size: 12px;
+            color: var(--success);
+        }
+
+        /* Bottom Confirm */
+        .bottom-confirm {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 16px;
+            background: var(--card-bg);
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+        }
+        .bottom-confirm button {
+            width: 100%;
+            padding: 14px;
+            border-radius: 24px;
+            border: none;
+            background: var(--primary);
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .bottom-confirm button:disabled {
+            background: var(--text-light);
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">选择交通方式</span>
+    </div>
+
+    <!-- Route Card -->
+    <div class="route-card">
+        <div class="route-path">
+            <span class="city">北京</span>
+            <span class="arrow">⟶</span>
+            <span class="city">上海</span>
+        </div>
+        <div class="route-label">选择出行方式，查看具体班次</div>
+    </div>
+
+    <!-- Transport Options -->
+    <div class="transport-section">
+        <div class="transport-label">交通方式</div>
+        <div class="transport-options">
+            <div class="transport-option active" onclick="selectTransport(this, 'airplane')">
+                <div class="icon">✈️</div>
+                <div class="name">飞机</div>
+                <div class="time">约2h30m</div>
+            </div>
+            <div class="transport-option" onclick="selectTransport(this, 'highspeed')">
+                <div class="icon">🚄</div>
+                <div class="name">高铁</div>
+                <div class="time">约4h30m</div>
+            </div>
+            <div class="transport-option" onclick="selectTransport(this, 'train')">
+                <div class="icon">🚃</div>
+                <div class="name">火车</div>
+                <div class="time">约9h</div>
+            </div>
+            <div class="transport-option" onclick="selectTransport(this, 'bus')">
+                <div class="icon">🚌</div>
+                <div class="name">汽车</div>
+                <div class="time">约12h</div>
+            </div>
+            <div class="transport-option" onclick="selectTransport(this, 'drive')">
+                <div class="icon">🚗</div>
+                <div class="name">自驾</div>
+                <div class="time">约12h</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auto-added Hubs -->
+    <div class="hub-info">
+        <div class="hub-label"><i class="bi bi-info-circle"></i> 选择航班后将自动添加以下交通枢纽（不可修改）</div>
+        <div class="hub-list">
+            <div class="hub-item">
+                <span class="hub-icon">✈️</span>
+                <div class="hub-detail">
+                    <div class="hub-name">北京首都国际机场 T3</div>
+                    <div class="hub-meta">出发地 · 起飞</div>
+                </div>
+                <span class="hub-time">08:00</span>
+            </div>
+            <div class="hub-item">
+                <span class="hub-icon">✈️</span>
+                <div class="hub-detail">
+                    <div class="hub-name">上海浦东国际机场</div>
+                    <div class="hub-meta">目的地 · 到达</div>
+                </div>
+                <span class="hub-time">10:30</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Selected Info -->
+    <div class="selected-info">
+        <i class="bi bi-check-circle-fill"></i>
+        <span>已选: 飞机 · 经济舱</span>
+    </div>
+
+    <!-- Flight List -->
+    <div class="flight-list">
+        <div class="flight-list-label">可选航班 (北京 → 上海)</div>
+
+        <div class="flight-card selected" onclick="selectFlight(this)">
+            <div class="header">
+                <div class="airline">
+                    <div class="airline-logo">国</div>
+                    <span class="flight-number">CA1515</span>
+                </div>
+                <span class="cabin">经济舱</span>
+            </div>
+            <div class="times">
+                <div class="time-block">
+                    <div class="time">08:00</div>
+                    <div class="city">PEK</div>
+                </div>
+                <div class="arrow-line"></div>
+                <div class="time-block">
+                    <div class="time">10:30</div>
+                    <div class="city">PVG</div>
+                </div>
+                <div class="duration">2h30m</div>
+            </div>
+            <div class="footer">
+                <span class="price">¥680</span>
+                <span class="seats">余票充足</span>
+            </div>
+        </div>
+
+        <div class="flight-card" onclick="selectFlight(this)">
+            <div class="header">
+                <div class="airline">
+                    <div class="airline-logo" style="background:#003580;">东</div>
+                    <span class="flight-number">MU5184</span>
+                </div>
+                <span class="cabin">经济舱</span>
+            </div>
+            <div class="times">
+                <div class="time-block">
+                    <div class="time">10:00</div>
+                    <div class="city">PEK</div>
+                </div>
+                <div class="arrow-line"></div>
+                <div class="time-block">
+                    <div class="time">12:30</div>
+                    <div class="city">PVG</div>
+                </div>
+                <div class="duration">2h30m</div>
+            </div>
+            <div class="footer">
+                <span class="price">¥650</span>
+                <span class="seats">余票充足</span>
+            </div>
+        </div>
+
+        <div class="flight-card" onclick="selectFlight(this)">
+            <div class="header">
+                <div class="airline">
+                    <div class="airline-logo" style="background:#0065B3;">南</div>
+                    <span class="flight-number">CZ3901</span>
+                </div>
+                <span class="cabin">经济舱</span>
+            </div>
+            <div class="times">
+                <div class="time-block">
+                    <div class="time">14:00</div>
+                    <div class="city">PEK</div>
+                </div>
+                <div class="arrow-line"></div>
+                <div class="time-block">
+                    <div class="time">16:30</div>
+                    <div class="city">PVG</div>
+                </div>
+                <div class="duration">2h30m</div>
+            </div>
+            <div class="footer">
+                <span class="price">¥620</span>
+                <span class="seats">余5张</span>
+            </div>
+        </div>
+
+        <div class="flight-card" onclick="selectFlight(this)">
+            <div class="header">
+                <div class="airline">
+                    <div class="airline-logo" style="background:#E61E32;">海</div>
+                    <span class="flight-number">HU7607</span>
+                </div>
+                <span class="cabin">经济舱</span>
+            </div>
+            <div class="times">
+                <div class="time-block">
+                    <div class="time">18:30</div>
+                    <div class="city">PEK</div>
+                </div>
+                <div class="arrow-line"></div>
+                <div class="time-block">
+                    <div class="time">21:00</div>
+                    <div class="city">PVG</div>
+                </div>
+                <div class="duration">2h30m</div>
+            </div>
+            <div class="footer">
+                <span class="price">¥590</span>
+                <span class="seats">余票充足</span>
+            </div>
+        </div>
+    </div>
+
+    <div style="height: 20px;"></div>
+
+    <!-- Bottom Confirm -->
+    <div class="bottom-confirm">
+        <button onclick="confirmSelection()">确 认 选 择</button>
+    </div>
+
+    <script>
+        let selectedTransport = 'airplane';
+        let selectedFlight = null;
+
+        function selectTransport(el, type) {
+            document.querySelectorAll('.transport-option').forEach(o => o.classList.remove('active'));
+            el.classList.add('active');
+            selectedTransport = type;
+        }
+
+        function selectFlight(el) {
+            document.querySelectorAll('.flight-card').forEach(f => f.classList.remove('selected'));
+            el.classList.add('selected');
+            selectedFlight = el;
+        }
+
+        function confirmSelection() {
+            const flightNum = document.querySelector('.flight-card.selected .flight-number').textContent;
+            const price = document.querySelector('.flight-card.selected .price').textContent;
+            alert('已选择: ' + flightNum + ' ' + price);
+        }
+    </script>
+</body>
+</html>

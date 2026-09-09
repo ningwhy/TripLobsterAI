@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'config/app_config.dart';
+import 'theme/app_colors.dart';
 import 'services/storage_service.dart';
 import 'providers/trip_provider.dart';
 import 'pages/home_page.dart';
@@ -28,13 +29,13 @@ class TripApp extends StatelessWidget {
         title: '旅行行程助手',
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
-          primarySwatch: Colors.blue,
+          primarySwatch: Colors.green,
           useMaterial3: true,
           colorScheme: ColorScheme.fromSeed(
-            seedColor: const Color(0xFF4A90D9),
+            seedColor: AppColors.green,
             brightness: Brightness.light,
           ),
-          scaffoldBackgroundColor: const Color(0xFFF5F5F5),
+          scaffoldBackgroundColor: AppColors.mintBg,
           appBarTheme: const AppBarTheme(
             backgroundColor: Colors.white,
             foregroundColor: Color(0xFF333333),

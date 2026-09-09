@@ -57,14 +57,15 @@ const wx = await j('GET', '/api/weather?lat=30.25&lon=120.15');
 check('weather', Array.isArray(wx.daily?.time) && wx.daily.time.length >= 7);
 
 // 5. AI 行程生成（核心）
-console.log('...planner generating (3天 杭州)...');
-const t0 = Date.now();
+console.log('...planner generating (3天 杭州 pureTransit)...');
+let t0 = Date.now();
 const plan = await j('POST', '/api/planner/generate', {
   city: '杭州',
   days: 3,
   startDate: '2026-10-01',
   pace: 'normal',
   interests: ['nature', 'culture', 'museum'],
+  tripMode: 'pureTransit',
   mustVisit: ['西湖'],
 });
 console.log(`planner took ${((Date.now() - t0) / 1000).toFixed(1)}s`);
@@ -76,11 +77,31 @@ const day1 = plan.trip?.days?.[0]?.locations?.[0];
 check('planner first place has time', Boolean(day1?.arrivalTime), day1 ? `${day1.name} @${day1.arrivalTime}-${day1.leaveTime}` : '');
 check('planner mustVisit honored', JSON.stringify(plan.trip).includes('西湖'));
 check('planner warnings is array', Array.isArray(plan.warnings));
+check('planner tripMode echoed', plan.trip?.tripMode === 'pureTransit', `mode=${plan.trip?.tripMode}`);
+const allTypes = (plan.trip?.days || []).flatMap((d) => d.locations.map((l) => l.type));
+check('planner 六类归类生效', allTypes.includes('restaurant') && allTypes.every((t) => ['attraction','restaurant','hotel','shopping','transport','other'].includes(t)), `types=${[...new Set(allTypes)].join(',')}`);
 console.log(JSON.stringify(plan.trip.days.map((d) => ({
   day: d.dayNumber,
   stops: d.locations.map((l) => `${l.name}(${l.arrivalTime}→${l.leaveTime}${l.transportMinutes ? ' 行' + l.transportMinutes + '分' : ''})`),
 })), null, 1).slice(0, 2400));
 if (plan.warnings.length) console.log('warnings:', plan.warnings.join(' / '));
+
+// 6. 自驾模式（验证 drive 路线 + tripMode 传递）
+console.log('...planner generating (2天 杭州 pureDrive)...');
+t0 = Date.now();
+const drivePlan = await j('POST', '/api/planner/generate', {
+  city: '杭州',
+  days: 2,
+  startDate: '2026-10-01',
+  pace: 'normal',
+  interests: ['nature'],
+  tripMode: 'pureDrive',
+});
+console.log(`drive planner took ${((Date.now() - t0) / 1000).toFixed(1)}s`);
+check('drive tripMode', drivePlan.trip?.tripMode === 'pureDrive');
+const driveLocs = (drivePlan.trip?.days || []).flatMap((d) => d.locations);
+check('drive locations exist', driveLocs.length >= 3, `total=${driveLocs.length}`);
+check('drive 无枢纽点(纯自驾规则)', !driveLocs.some((l) => l.type === 'transport'));
 
 console.log(failed ? `\n${failed} test(s) FAILED` : '\nALL TESTS PASSED');
 process.exit(failed ? 1 : 0);

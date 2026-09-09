@@ -9,7 +9,9 @@ import 'trip_preview_page.dart';
 /// P0-2 AI 智能行程生成
 /// 交互原则（AI 副驾）：AI 给建议，用户做决策 —— 生成后先预览，可采纳后继续手动编辑
 class AiPlanPage extends StatefulWidget {
-  const AiPlanPage({super.key});
+  final String? initialCity;
+
+  const AiPlanPage({super.key, this.initialCity});
 
   @override
   State<AiPlanPage> createState() => _AiPlanPageState();
@@ -35,6 +37,15 @@ class _AiPlanPageState extends State<AiPlanPage> {
   bool _generating = false;
   Map<String, dynamic>? _result;
   String? _error;
+  TripMode _tripMode = TripMode.pureTransit;
+
+  @override
+  void initState() {
+    super.initState();
+    if (widget.initialCity != null && widget.initialCity!.isNotEmpty) {
+      _cityController.text = widget.initialCity!;
+    }
+  }
 
   @override
   void dispose() {
@@ -61,6 +72,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
         startDate: DateFormat('yyyy-MM-dd').format(_startDate),
         pace: _pace,
         interests: _selectedInterests.toList(),
+        tripMode: _tripMode.name,
         mustVisit: _mustController.text
             .split(RegExp(r'[,，、\s]+'))
             .where((e) => e.trim().isNotEmpty)
@@ -115,6 +127,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
               (e) => e.name == loc['type'],
               orElse: () => LocationType.attraction,
             ),
+            hubKind: loc['hubKind'],
             stayMinutes: loc['stayMinutes'],
             transportMinutes: loc['transportMinutes'],
             openTime: loc['openTime'],
@@ -129,6 +142,10 @@ class _AiPlanPageState extends State<AiPlanPage> {
       startDate: DateTime.parse(tripData['startDate'] as String),
       endDate: DateTime.parse(tripData['endDate'] as String),
       days: days,
+      tripMode: TripMode.values.firstWhere(
+        (e) => e.name == tripData['tripMode'],
+        orElse: () => TripMode.pureTransit,
+      ),
       createdAt: now,
       updatedAt: now,
     );
@@ -230,6 +247,18 @@ class _AiPlanPageState extends State<AiPlanPage> {
           ],
           selected: {_pace},
           onSelectionChanged: (s) => setState(() => _pace = s.first),
+        ),
+        const SizedBox(height: 20),
+        const Text('行程类型', style: TextStyle(fontWeight: FontWeight.bold)),
+        const SizedBox(height: 8),
+        SegmentedButton<TripMode>(
+          segments: const [
+            ButtonSegment(value: TripMode.pureDrive, label: Text('纯自驾'), icon: Icon(Icons.directions_car)),
+            ButtonSegment(value: TripMode.pureTransit, label: Text('公共交通'), icon: Icon(Icons.directions_transit)),
+            ButtonSegment(value: TripMode.transitPlusRental, label: Text('落地租车'), icon: Icon(Icons.flight_land)),
+          ],
+          selected: {_tripMode},
+          onSelectionChanged: (s) => setState(() => _tripMode = s.first),
         ),
         const SizedBox(height: 20),
         const Text('兴趣偏好', style: TextStyle(fontWeight: FontWeight.bold)),

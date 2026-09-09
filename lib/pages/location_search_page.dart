@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import '../models/trip_models.dart';
 import '../services/amap_service.dart';
+import '../utils/poi_classifier.dart';
 
 class LocationSearchPage extends StatefulWidget {
   const LocationSearchPage({super.key});
@@ -160,7 +161,9 @@ class _LocationSearchPageState extends State<LocationSearchPage> {
   }
 
   Widget _buildResultItem(AmapPoi poi) {
-    final type = _poiTypeToLocationType(poi.typecode);
+    // 过滤不可停留的 POI（道路附属/地名地址/地铁公交站）
+    if (!PoiClassifier.isStayable(poi.typecode)) return const SizedBox.shrink();
+    final type = PoiClassifier.classify(poi.typecode, name: poi.name);
     return ListTile(
       leading: Container(
         width: 40,
@@ -191,24 +194,12 @@ class _LocationSearchPageState extends State<LocationSearchPage> {
           city: poi.city,
           district: poi.district,
           type: type,
+          hubKind: PoiClassifier.hubKindOf(poi.typecode),
           stayMinutes: _getDefaultStayTime(type),
         );
         Navigator.pop(context, location);
       },
     );
-  }
-
-  LocationType _poiTypeToLocationType(String typecode) {
-    // 高德POI类型码对应
-    if (typecode.startsWith('1501')) return LocationType.hotel;      // 酒店
-    if (typecode.startsWith('1502')) return LocationType.attraction; // 景点
-    if (typecode.startsWith('1503')) return LocationType.restaurant; // 餐饮
-    if (typecode.startsWith('1504')) return LocationType.shopping;   // 购物
-    if (typecode.startsWith('1505')) return LocationType.transport;  // 交通
-    if (typecode.startsWith('1506')) return LocationType.attraction; // 娱乐
-    if (typecode.startsWith('1507')) return LocationType.other;      // 生活服务
-    if (typecode.startsWith('1508')) return LocationType.other;      // 医疗
-    return LocationType.other;
   }
 
   IconData _getTypeIcon(LocationType type) {

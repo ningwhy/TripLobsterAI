@@ -1,0 +1,17 @@
+{
+  "pages": [
+    "pages/input/input",
+    "pages/loading/loading",
+    "pages/itinerary/itinerary",
+    "pages/map/map"
+  ],
+  "window": {
+    "backgroundTextStyle": "light",
+    "navigationBarBackgroundColor": "#4A90E2",
+    "navigationBarTitleText": "AI旅行规划",
+    "navigationBarTextStyle": "white",
+    "backgroundColor": "#f5f5f5"
+  },
+  "sitemapLocation": "sitemap.json",
+  "style": "v2"
+}

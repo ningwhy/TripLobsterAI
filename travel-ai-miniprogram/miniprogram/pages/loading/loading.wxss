@@ -1,0 +1,70 @@
+/* pages/loading/loading.wxss */
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 60rpx 40rpx;
+  background: linear-gradient(180deg, #f0f6ff 0%, #fff 100%);
+}
+
+.robot {
+  font-size: 120rpx;
+  margin-bottom: 40rpx;
+  animation: bounce 1.5s infinite;
+}
+
+@keyframes bounce {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-20rpx); }
+}
+
+.title {
+  font-size: 36rpx;
+  font-weight: 700;
+  color: #1a1a2e;
+  margin-bottom: 60rpx;
+  text-align: center;
+}
+
+.steps {
+  width: 100%;
+  max-width: 600rpx;
+  margin-bottom: 60rpx;
+}
+
+.step {
+  display: flex;
+  align-items: center;
+  padding: 24rpx 30rpx;
+  margin-bottom: 16rpx;
+  background: #f0f0f0;
+  border-radius: 16rpx;
+  transition: all 0.3s;
+}
+
+.step.done {
+  background: #e8f5e9;
+}
+
+.step-icon {
+  font-size: 32rpx;
+  margin-right: 20rpx;
+}
+
+.step-text {
+  font-size: 28rpx;
+  color: #555;
+}
+
+.step.done .step-text {
+  color: #2e7d32;
+  font-weight: 500;
+}
+
+.tip {
+  font-size: 24rpx;
+  color: #aaa;
+  text-align: center;
+}

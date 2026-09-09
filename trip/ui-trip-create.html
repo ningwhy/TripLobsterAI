@@ -1,0 +1,729 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>旅行行程创建助手 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --primary-dark: #1976D2;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+            --type-transport: #4A90D9;
+            --type-hotel: #9B59B6;
+            --type-attraction: #E74C3C;
+            --type-restaurant: #F39C12;
+            --type-shopping: #2ECC71;
+            --type-other: #95A5A6;
+            --hub-bg: #FFF3E0;
+            --hub-border: #FFB74D;
+            --warning: #FF9800;
+            --error: #F44336;
+        }
+
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding-bottom: 100px;
+        }
+
+        /* App Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+
+        .app-header .back-btn { font-size: 24px; color: var(--text-main); text-decoration: none; }
+        .app-header .title { font-size: 18px; font-weight: 600; }
+        .app-header .save-btn { color: var(--primary); font-size: 14px; font-weight: 500; }
+
+        /* Home Location */
+        .home-location {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            margin: 16px;
+            border-radius: 16px;
+            padding: 16px;
+            color: white;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+        .home-location .icon {
+            width: 44px;
+            height: 44px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+        }
+        .home-location .info { flex: 1; }
+        .home-location .label { font-size: 11px; opacity: 0.8; }
+        .home-location .address { font-size: 14px; font-weight: 500; }
+        .home-location .set-btn {
+            padding: 6px 14px;
+            background: rgba(255,255,255,0.2);
+            border-radius: 16px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+
+        /* Trip Info */
+        .trip-info-section { background: var(--card-bg); padding: 16px; margin-bottom: 12px; }
+        .trip-name-input {
+            width: 100%; border: 1px solid var(--border); border-radius: 12px;
+            padding: 14px 16px; font-size: 16px; margin-bottom: 12px; outline: none;
+        }
+        .trip-name-input:focus { border-color: var(--primary); }
+        .info-row { display: flex; gap: 12px; }
+        .info-item {
+            flex: 1; background: var(--bg); border-radius: 8px; padding: 12px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .info-item i { color: var(--text-secondary); font-size: 16px; }
+        .info-item .value { font-size: 14px; }
+        .trip-days { text-align: center; font-size: 12px; color: var(--text-secondary); margin-top: 8px; }
+
+        /* Time Budget Bar */
+        .time-budget {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            border-left: 4px solid var(--primary);
+        }
+        .time-budget .label { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+        .time-budget .hours { font-size: 14px; font-weight: 600; }
+        .time-budget .hours .used { color: var(--primary); }
+        .time-budget .hours .total { color: var(--text-light); }
+        .time-budget .progress {
+            height: 6px; background: var(--bg); border-radius: 3px; margin-top: 8px; overflow: hidden;
+        }
+        .time-budget .progress-bar {
+            height: 100%; background: var(--primary); border-radius: 3px; transition: width 0.3s;
+        }
+        .time-budget .progress-bar.warning { background: var(--warning); }
+        .time-budget .progress-bar.full { background: var(--error); }
+
+        /* Warning Banner */
+        .warning-banner {
+            background: #FFF3E0;
+            border: 1px solid var(--warning);
+            border-radius: 8px;
+            padding: 10px 12px;
+            margin: 0 16px 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            color: var(--warning);
+        }
+        .warning-banner i { font-size: 16px; }
+
+        /* Transport Section */
+        .transport-section { background: var(--card-bg); padding: 16px; margin-bottom: 12px; }
+        .transport-tabs { display: flex; background: var(--bg); border-radius: 20px; padding: 4px; margin-bottom: 12px; }
+        .transport-tab {
+            flex: 1; text-align: center; padding: 8px 16px; border-radius: 16px;
+            font-size: 14px; cursor: pointer; transition: all 0.2s;
+        }
+        .transport-tab.active { background: var(--primary); color: white; }
+        .transport-tab:not(.active) { color: var(--text-secondary); }
+        .transport-detail { font-size: 13px; color: var(--text-secondary); }
+
+        /* Timeline */
+        .timeline-section { background: var(--card-bg); padding: 16px; }
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .section-title { font-size: 14px; font-weight: 600; }
+        .add-btn {
+            width: 28px; height: 28px; border-radius: 50%; background: var(--primary);
+            color: white; display: flex; align-items: center; justify-content: center;
+            font-size: 18px; border: none; cursor: pointer;
+        }
+
+        .time-legend {
+            display: flex; gap: 16px; margin-bottom: 12px; font-size: 12px; color: var(--text-secondary);
+        }
+        .legend-item { display: flex; align-items: center; gap: 4px; }
+        .legend-dot { width: 8px; height: 8px; border-radius: 50%; }
+        .legend-dot.arrive { background: var(--primary); }
+        .legend-dot.leave { background: var(--text-light); }
+        .legend-dot.hub { background: var(--hub-border); }
+
+        /* Timeline Item */
+        .timeline-item { display: flex; gap: 12px; margin-bottom: 16px; position: relative; }
+        .timeline-item:last-child { margin-bottom: 0; }
+
+        .time-column { width: 70px; text-align: right; flex-shrink: 0; }
+        .arrive-time { font-size: 16px; font-weight: 600; }
+        .leave-time { font-size: 12px; color: var(--text-secondary); margin-top: 2px; }
+
+        .timeline-line {
+            width: 2px; background: var(--primary); position: relative; flex-shrink: 0;
+        }
+        .timeline-line::before {
+            content: ''; width: 8px; height: 8px; background: var(--primary); border-radius: 50%;
+            position: absolute; top: 6px; left: -3px;
+        }
+        .timeline-line.dotted {
+            background: repeating-linear-gradient(to bottom, var(--primary) 0, var(--primary) 4px, transparent 4px, transparent 8px);
+        }
+        .timeline-line.hub { background: var(--hub-border); }
+        .timeline-line.hub::before { background: var(--hub-border); }
+
+        /* Location Card */
+        .location-card {
+            flex: 1; background: var(--card-bg); border-radius: 12px; padding: 14px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08); position: relative;
+        }
+        .location-card.auto-added { background: var(--hub-bg); border: 1px dashed var(--hub-border); }
+        .location-card .lock-badge {
+            position: absolute; top: 10px; right: 10px; font-size: 12px;
+            color: var(--hub-border); display: flex; align-items: center; gap: 4px;
+        }
+
+        .poi-type-tag {
+            display: inline-block; padding: 2px 8px; border-radius: 4px;
+            font-size: 10px; font-weight: 600; color: white; margin-bottom: 6px;
+        }
+        .poi-type-tag.transport { background: var(--type-transport); }
+        .poi-type-tag.hotel { background: var(--type-hotel); }
+        .poi-type-tag.attraction { background: var(--type-attraction); }
+        .poi-type-tag.restaurant { background: var(--type-restaurant); }
+        .poi-type-tag.shopping { background: var(--type-shopping); }
+        .poi-type-tag.other { background: var(--type-other); }
+
+        .location-name { font-size: 15px; font-weight: 500; margin-bottom: 4px; padding-right: 50px; }
+        .location-address { font-size: 12px; color: var(--text-secondary); display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+
+        .stay-info {
+            display: flex; flex-wrap: wrap; gap: 8px; font-size: 12px;
+        }
+        .stay-duration {
+            display: inline-flex; align-items: center; gap: 4px;
+            color: var(--text-secondary); background: var(--bg); padding: 4px 8px; border-radius: 4px;
+        }
+        .stay-duration .api-tag { font-size: 10px; color: var(--primary); margin-left: 4px; }
+        .hours-info {
+            display: inline-flex; align-items: center; gap: 4px;
+            color: var(--text-secondary); background: var(--primary-light); padding: 4px 8px; border-radius: 4px;
+        }
+        .hours-info .closed { color: var(--error); }
+
+        /* Transport Info */
+        .transport-info {
+            display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+            background: var(--primary-light); border-radius: 8px; margin-bottom: 12px; font-size: 13px;
+        }
+        .transport-info i { color: var(--primary); }
+        .transport-info .duration { color: var(--text-secondary); }
+        .transport-info .distance { color: var(--text-secondary); margin-left: auto; }
+
+        /* Day Header */
+        .day-header {
+            font-size: 13px; font-weight: 600; color: var(--text-secondary);
+            margin-bottom: 12px; padding-left: 82px;
+        }
+        .day-header .time-summary {
+            float: right; font-weight: 400; font-size: 12px;
+        }
+
+        /* Bottom Bar */
+        .bottom-bar {
+            position: fixed; bottom: 0; left: 0; right: 0; background: var(--card-bg);
+            padding: 12px 16px; display: flex; gap: 12px; box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+        }
+        .btn-save {
+            flex: 1; padding: 14px; border-radius: 24px; border: 1px solid var(--primary);
+            background: var(--card-bg); color: var(--primary); font-size: 14px; font-weight: 600; cursor: pointer;
+        }
+        .btn-book {
+            flex: 1; padding: 14px; border-radius: 24px; border: none;
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            color: white; font-size: 14px; font-weight: 600; cursor: pointer;
+            display: flex; align-items: center; justify-content: center; gap: 6px;
+        }
+
+        /* First Location Modal */
+        .modal-overlay {
+            position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+            display: none; align-items: flex-end; justify-content: center;
+            z-index: 1000;
+        }
+        .modal-overlay.show { display: flex; }
+        .modal-content {
+            background: var(--card-bg); width: 100%; max-width: 500px;
+            border-radius: 24px 24px 0 0; padding: 24px;
+            animation: slideUp 0.3s ease;
+        }
+        @keyframes slideUp {
+            from { transform: translateY(100%); }
+            to { transform: translateY(0); }
+        }
+        .modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 20px;
+        }
+        .modal-title { font-size: 18px; font-weight: 600; }
+        .modal-close { font-size: 24px; color: var(--text-secondary); cursor: pointer; }
+
+        .route-preview {
+            background: linear-gradient(135deg, var(--primary-light), #E8F5E9);
+            border-radius: 16px; padding: 20px; margin-bottom: 20px;
+        }
+        .route-preview .title {
+            font-size: 14px; font-weight: 600; margin-bottom: 12px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .route-nodes {
+            display: flex; align-items: center; gap: 8px;
+        }
+        .route-node {
+            text-align: center;
+        }
+        .route-node .dot {
+            width: 36px; height: 36px; border-radius: 50%;
+            background: var(--card-bg); display: flex; align-items: center; justify-content: center;
+            font-size: 16px; margin: 0 auto 4px; box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .route-node .label { font-size: 11px; color: var(--text-secondary); }
+        .route-node .time { font-size: 12px; font-weight: 600; }
+        .route-arrow {
+            flex: 1; height: 2px; background: var(--primary);
+            position: relative; min-width: 30px;
+        }
+        .route-arrow::after {
+            content: '▶'; position: absolute; right: -4px; top: -8px;
+            font-size: 10px; color: var(--primary);
+        }
+
+        .transport-options {
+            display: flex; flex-direction: column; gap: 12px;
+        }
+        .transport-option {
+            display: flex; align-items: center; gap: 12px;
+            padding: 14px; border: 2px solid var(--border); border-radius: 12px;
+            cursor: pointer; transition: all 0.2s;
+        }
+        .transport-option:hover { border-color: var(--primary); }
+        .transport-option.selected { border-color: var(--primary); background: var(--primary-light); }
+        .transport-option .icon {
+            width: 44px; height: 44px; border-radius: 10px;
+            display: flex; align-items: center; justify-content: center; font-size: 20px;
+        }
+        .transport-option .info { flex: 1; }
+        .transport-option .name { font-size: 14px; font-weight: 500; }
+        .transport-option .detail { font-size: 12px; color: var(--text-secondary); }
+        .transport-option .select-icon {
+            width: 20px; height: 20px; border-radius: 50%; border: 2px solid var(--border);
+            display: flex; align-items: center; justify-content: center;
+        }
+        .transport-option.selected .select-icon {
+            border-color: var(--primary); background: var(--primary); color: white; font-size: 12px;
+        }
+
+        .modal-btn {
+            width: 100%; padding: 16px; border-radius: 24px; border: none;
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            color: white; font-size: 16px; font-weight: 600; cursor: pointer; margin-top: 20px;
+        }
+
+        /* Inter-city Trigger Hint */
+        .trigger-hint {
+            background: var(--primary-light);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 12px 16px;
+            font-size: 13px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+        }
+        .trigger-hint i { color: var(--primary); font-size: 18px; margin-top: 2px; }
+        .trigger-hint .title { font-weight: 600; margin-bottom: 4px; }
+        .trigger-hint .desc { color: var(--text-secondary); line-height: 1.5; }
+
+        /* Transport Trigger Badge */
+        .transport-trigger {
+            position: absolute;
+            right: -8px;
+            top: 20px;
+            background: var(--warning);
+            color: white;
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+        }
+    </style>
+</head>
+<body>
+    <!-- App Header -->
+    <div class="app-header">
+        <a href="#" class="back-btn"><i class="bi bi-arrow-left"></i></a>
+        <span class="title">创建行程</span>
+        <span class="save-btn">保存</span>
+    </div>
+
+    <!-- Home Location -->
+    <div class="home-location">
+        <div class="icon">🏠</div>
+        <div class="info">
+            <div class="label">我的家</div>
+            <div class="address">北京市昌平区</div>
+        </div>
+        <div class="set-btn" onclick="alert('设置家的位置\n\n用户可设置常住地址，后续行程将自动以家为起点和终点')">修改</div>
+    </div>
+
+    <!-- Trip Info -->
+    <div class="trip-info-section">
+        <input type="text" class="trip-name-input" placeholder="请输入行程名称" value="北京3日游">
+        <div class="info-row">
+            <div class="info-item"><i class="bi bi-calendar3"></i><span class="value">02/21 - 02/23</span></div>
+            <div class="info-item"><i class="bi bi-people"></i><span class="value">2人</span></div>
+        </div>
+        <div class="trip-days">3天行程</div>
+    </div>
+
+    <!-- Time Budget -->
+    <div class="time-budget">
+        <div class="label">今日时间使用</div>
+        <div class="hours"><span class="used">9小时30分钟</span><span class="total"> / 24小时</span></div>
+        <div class="progress">
+            <div class="progress-bar" style="width: 40%;"></div>
+        </div>
+    </div>
+
+    <!-- Warning -->
+    <div class="warning-banner">
+        <i class="bi bi-exclamation-triangle"></i>
+        <span>故宫博物院周一闭馆，建议调整行程或更换景点</span>
+    </div>
+
+    <!-- Transport Section -->
+    <div class="transport-section">
+        <div class="transport-tabs">
+            <div class="transport-tab active"><i class="bi bi-car-front"></i> 自驾</div>
+            <div class="transport-tab"><i class="bi bi-airplane"></i> 公共交通</div>
+        </div>
+        <div class="transport-detail">
+            <i class="bi bi-info-circle"></i> 自驾方案：全程128公里，预计2小时15分钟
+        </div>
+    </div>
+
+    <!-- Trigger Hint -->
+    <div class="trigger-hint">
+        <i class="bi bi-lightbulb"></i>
+        <div>
+            <div class="title">跨城交通自动触发</div>
+            <div class="desc">当您添加不同城市的地点时，系统会自动弹出交通选择框，帮您安排完整的出行路线。</div>
+        </div>
+    </div>
+
+    <!-- Timeline -->
+    <div class="timeline-section">
+        <div class="section-header">
+            <span class="section-title"><i class="bi bi-clock-history"></i> 行程时间线</span>
+            <button class="add-btn">+</button>
+        </div>
+
+        <div class="time-legend">
+            <div class="legend-item"><span class="legend-dot arrive"></span><span>到达时间</span></div>
+            <div class="legend-item"><span class="legend-dot leave"></span><span>停留时长</span></div>
+            <div class="legend-item"><span class="legend-dot hub"></span><span>系统添加</span></div>
+        </div>
+
+        <!-- Day 1 -->
+        <div class="day-header">
+            第1天 · 2月21日 <span class="time-summary">已安排 9h30m</span>
+        </div>
+
+        <!-- Item 1: First location triggers home → transport hub → destination -->
+        <!-- 家 → 首都机场 → 昆明酒店 -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">06:00</div><div class="leave-time"></div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card auto-added" style="background: #E8F5E9; border: 1px dashed #4CAF50;">
+                <span class="lock-badge" style="color:#4CAF50;"><i class="bi bi-house-fill"></i> 从家出发</span>
+                <span class="poi-type-tag transport">家</span>
+                <div class="location-name">北京市昌平区</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 预设家庭地址</div>
+            </div>
+        </div>
+
+        <!-- Transport: Home to Airport -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time" style="font-size:14px">06:30</div><div class="leave-time">+30m</div></div>
+            <div class="timeline-line dotted" style="border-left: 2px dashed #4CAF50;"></div>
+            <div class="transport-info" style="flex:1;margin:0; background: #E8F5E9;">
+                <i class="bi bi-car-front-fill" style="color:#4CAF50;"></i><span>打车前往机场</span>
+                <span class="duration">约30分钟</span><span class="distance">40km</span>
+            </div>
+        </div>
+
+        <!-- Item: Airport (Auto-added) -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">07:00</div><div class="leave-time">停留1h</div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card auto-added">
+                <span class="lock-badge"><i class="bi bi-lock-fill"></i> 系统添加</span>
+                <span class="poi-type-tag transport">✈️ 飞机</span>
+                <div class="location-name">首都T2航站楼</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 北京市朝阳区</div>
+                <div class="stay-info">
+                    <span class="hours-info"><i class="bi bi-clock"></i> 出发: 08:00</span>
+                    <span class="stay-duration">值机安检约1小时</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transport: Flight -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time" style="font-size:14px">08:00</div><div class="leave-time">+2h30m</div></div>
+            <div class="timeline-line dotted" style="border-left: 2px dashed var(--primary);"></div>
+            <div class="transport-info" style="flex:1;margin:0;">
+                <i class="bi bi-airplane"></i><span>国航 CA1515 飞往昆明</span>
+                <span class="duration">约2.5小时</span><span class="distance">2200km</span>
+            </div>
+        </div>
+
+        <!-- Item: Destination Airport (Auto-added) -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">10:30</div><div class="leave-time">停留30m</div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card auto-added">
+                <span class="lock-badge"><i class="bi bi-lock-fill"></i> 系统添加</span>
+                <span class="poi-type-tag transport">🛬 到达</span>
+                <div class="location-name">昆明长水国际机场</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 昆明市官渡区</div>
+                <div class="stay-info">
+                    <span class="hours-info"><i class="bi bi-clock"></i> 到达: 10:30</span>
+                    <span class="stay-duration">取行李约30分钟</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transport: Airport to First Hotel -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time" style="font-size:14px">11:00</div><div class="leave-time">+50m</div></div>
+            <div class="timeline-line dotted"></div>
+            <div class="transport-info" style="flex:1;margin:0;">
+                <i class="bi bi-taxi-front-fill"></i><span>打车前往酒店</span>
+                <span class="duration">约50分钟</span><span class="distance">35km</span>
+            </div>
+        </div>
+
+        <!-- Item 2: First location - Hotel in Kunming -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">11:50</div><div class="leave-time">入住</div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card" style="border: 2px solid #4CAF50;">
+                <span class="poi-type-tag hotel">🏨 首晚住宿</span>
+                <div class="location-name">昆明翠湖宾馆</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 昆明市五华区翠湖东路</div>
+                <div class="stay-info">
+                    <span class="hours-info"><i class="bi bi-moon"></i> 全天营业</span>
+                    <span class="stay-duration">建议过夜</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Transport -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time" style="font-size:14px">15:30</div><div class="leave-time">+30m</div></div>
+            <div class="timeline-line dotted"></div>
+            <div class="transport-info" style="flex:1;margin:0;">
+                <i class="bi bi-car-front-fill"></i><span>打车前往酒店</span>
+                <span class="duration">约30分钟</span><span class="distance">12km</span>
+            </div>
+        </div>
+
+        <!-- Item 3 -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">16:00</div><div class="leave-time">入住</div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card">
+                <span class="poi-type-tag hotel">酒店</span>
+                <div class="location-name">北京王府半岛酒店</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 东城区王府井</div>
+                <div class="stay-info">
+                    <span class="hours-info"><i class="bi bi-moon"></i> 全天营业</span>
+                    <span class="stay-duration">建议过夜</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Day 2 -->
+        <div class="day-header" style="margin-top: 20px;">
+            第2天 · 2月22日 <span class="time-summary">已安排 5h</span>
+        </div>
+
+        <!-- Auto-added: Transit Hub -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">09:00</div><div class="leave-time">停留</div></div>
+            <div class="timeline-line hub"></div>
+            <div class="location-card auto-added">
+                <span class="lock-badge"><i class="bi bi-lock-fill"></i> 系统添加</span>
+                <span class="poi-type-tag transport">交通枢纽</span>
+                <div class="location-name">北京站</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 东城区</div>
+                <div class="stay-info">
+                    <span class="stay-duration"><i class="bi bi-train-front"></i> 乘火车前往</span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Item 4 -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">12:00</div><div class="leave-time">停留1h</div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card">
+                <span class="poi-type-tag restaurant">餐厅</span>
+                <div class="location-name">全聚德烤鸭店</div>
+                <div class="location-address"><i class="bi bi-geo"></i> 东城区前门大街</div>
+                <div class="stay-info">
+                    <span class="hours-info"><i class="bi bi-clock"></i> 营业: 11:00-21:00</span>
+                    <span class="stay-duration">建议1小时 <span class="api-tag">(API)</span></span>
+                </div>
+            </div>
+        </div>
+
+        <!-- Item 5 -->
+        <div class="timeline-item">
+            <div class="time-column"><div class="arrive-time">13:30</div><div class="leave-time">停留3h</div></div>
+            <div class="timeline-line"></div>
+            <div class="location-card" style="border: 1px solid var(--error);">
+                <span class="poi-type-tag attraction">景点</span>
+                <div class="location-name">故宫博物院 <span style="color:var(--error);font-size:12px;">⚠️ 周一闭馆</span></div>
+                <div class="location-address"><i class="bi bi-geo"></i> 东城区景山前街</div>
+                <div class="stay-info">
+                    <span class="hours-info closed"><i class="bi bi-x-circle"></i> 08:30-17:00 (已闭馆)</span>
+                    <span class="stay-duration">建议3小时 <span class="api-tag">(API)</span></span>
+                </div>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- Bottom Bar -->
+    <div class="bottom-bar">
+        <button class="btn-save">保存行程</button>
+        <button class="btn-book"><i class="bi bi-box-arrow-up-right"></i> 去预订</button>
+    </div>
+
+    <!-- Transport Selection Modal -->
+    <div class="modal-overlay show" id="transportModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span class="modal-title">🚄 设置城际交通</span>
+                <span class="modal-close" onclick="closeModal()">×</span>
+            </div>
+
+            <div class="route-preview">
+                <div class="title"><i class="bi bi-arrow-right-circle"></i> 行程预览 · 第1段</div>
+                <div class="route-nodes">
+                    <div class="route-node">
+                        <div class="dot">🏠</div>
+                        <div class="label">北京昌平</div>
+                        <div class="time">06:00</div>
+                    </div>
+                    <div class="route-arrow"></div>
+                    <div class="route-node">
+                        <div class="dot">✈️</div>
+                        <div class="label">首都T2</div>
+                        <div class="time">08:00</div>
+                    </div>
+                    <div class="route-arrow"></div>
+                    <div class="route-node">
+                        <div class="dot">🛬</div>
+                        <div class="label">昆明</div>
+                        <div class="time">10:30</div>
+                    </div>
+                    <div class="route-arrow"></div>
+                    <div class="route-node">
+                        <div class="dot">🏨</div>
+                        <div class="label">昆明酒店</div>
+                        <div class="time">11:50</div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="transport-options">
+                <div class="transport-option selected" onclick="selectTransport(this)">
+                    <div class="icon" style="background: #E3F2FD;">✈️</div>
+                    <div class="info">
+                        <div class="name">飞机</div>
+                        <div class="detail">国航 CA1515 · 08:00起飞 · 2.5h</div>
+                    </div>
+                    <div class="select-icon">✓</div>
+                </div>
+                <div class="transport-option" onclick="selectTransport(this)">
+                    <div class="icon" style="background: #FFF3E0;">🚄</div>
+                    <div class="info">
+                        <div class="name">高铁</div>
+                        <div class="detail">需先乘飞机到昆明 · 约4h</div>
+                    </div>
+                    <div class="select-icon"></div>
+                </div>
+                <div class="transport-option" onclick="selectTransport(this)">
+                    <div class="icon" style="background: #E8F5E9;">🚗</div>
+                    <div class="info">
+                        <div class="name">自驾</div>
+                        <div class="detail">全程约2200km · 约26h</div>
+                    </div>
+                    <div class="select-icon"></div>
+                </div>
+            </div>
+
+            <button class="modal-btn" onclick="confirmTransport()">确认交通方式</button>
+        </div>
+    </div>
+
+    <script>
+        let transportSegments = [
+            { from: '北京昌平', to: '昆明', type: 'flight', status: 'completed' },
+            { from: '昆明', to: '大理', type: 'train', status: 'pending' },
+            { from: '大理', to: '丽江', type: 'bus', status: 'pending' }
+        ];
+        let currentSegment = 0;
+
+        function selectTransport(el) {
+            document.querySelectorAll('.transport-option').forEach(o => o.classList.remove('selected'));
+            el.classList.add('selected');
+        }
+        function closeModal() {
+            document.getElementById('transportModal').classList.remove('show');
+        }
+        function confirmTransport() {
+            closeModal();
+            if (currentSegment < transportSegments.length - 1) {
+                currentSegment++;
+                setTimeout(() => {
+                    alert(`第${currentSegment + 1}段交通设置\n\n从 ${transportSegments[currentSegment].from} 到 ${transportSegments[currentSegment].to}\n\n系统将自动弹出交通选择框\n（实际使用中：用户添加新城市时自动触发）`);
+                }, 500);
+            } else {
+                alert('已确认所有交通方式！\n\n完整路线：\n北京昌平 → 首都T2 → 昆明 → 大理 → 丽江\n\n后续添加新城市时，系统会自动弹出交通选择');
+            }
+        }
+    </script>
+</body>
+</html>

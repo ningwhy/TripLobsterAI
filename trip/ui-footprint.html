@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>我的足迹 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #1a1a2e;
+            --card-bg: #16213e;
+            --text-main: #ffffff;
+            --text-secondary: #a0a0a0;
+            --text-light: #666666;
+            --glow: #00d4ff;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .app-header {
+            background: rgba(22, 33, 62, 0.95);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            backdrop-filter: blur(10px);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+        .app-header .add-btn { color: var(--glow); font-size: 14px; }
+
+        /* Stats Card */
+        .stats-card {
+            background: linear-gradient(135deg, #16213e, #1a1a2e);
+            margin: 16px;
+            border-radius: 16px;
+            padding: 20px;
+            border: 1px solid rgba(0, 212, 255, 0.2);
+            display: flex;
+            justify-content: space-around;
+        }
+        .stats-card .stat { text-align: center; }
+        .stats-card .stat-value { font-size: 24px; font-weight: 700; color: var(--glow); }
+        .stats-card .stat-label { font-size: 12px; color: var(--text-secondary); margin-top: 4px; }
+
+        /* Map Container */
+        .map-container {
+            position: relative;
+            height: calc(100vh - 200px);
+            margin: 0 16px;
+            border-radius: 16px;
+            overflow: hidden;
+            background: #0f0f23;
+        }
+
+        /* 模拟中国地图背景 */
+        .map-bg {
+            position: absolute;
+            inset: 0;
+            background:
+                radial-gradient(ellipse at center, rgba(0, 212, 255, 0.05) 0%, transparent 70%),
+                linear-gradient(180deg, #0a0a1a 0%, #0f0f23 100%);
+        }
+
+        /* 发光城市节点 */
+        .city-node {
+            position: absolute;
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+            z-index: 10;
+        }
+        .city-node .dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: var(--glow);
+            box-shadow: 0 0 10px var(--glow), 0 0 20px var(--glow), 0 0 30px var(--glow);
+            animation: pulse 2s infinite;
+        }
+        .city-node .dot.more {
+            width: 16px;
+            height: 16px;
+            background: #ff6b6b;
+            box-shadow: 0 0 10px #ff6b6b, 0 0 20px #ff6b6b;
+        }
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.8; }
+        }
+
+        .city-node .label {
+            position: absolute;
+            top: 18px;
+            left: 50%;
+            transform: translateX(-50%);
+            white-space: nowrap;
+            font-size: 11px;
+            color: var(--text-main);
+            text-shadow: 0 0 10px rgba(0,0,0,0.8);
+        }
+
+        /* 连线 - 非常细的发光线条 */
+        .connection-line {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+        }
+        .connection-line svg {
+            width: 100%;
+            height: 100%;
+        }
+        .connection-line path {
+            fill: none;
+            stroke: var(--glow);
+            stroke-width: 1;
+            stroke-linecap: round;
+            opacity: 0.4;
+            filter: drop-shadow(0 0 2px var(--glow));
+        }
+
+        /* 已访问标签 */
+        .visited-tag {
+            position: absolute;
+            bottom: 16px;
+            left: 16px;
+            background: rgba(22, 33, 62, 0.9);
+            border: 1px solid rgba(0, 212, 255, 0.3);
+            border-radius: 20px;
+            padding: 8px 16px;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .visited-tag .dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--glow);
+            box-shadow: 0 0 6px var(--glow);
+        }
+
+        /* Bottom Panel */
+        .bottom-panel {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--card-bg);
+            border-radius: 20px 20px 0 0;
+            padding: 20px;
+            box-shadow: 0 -4px 20px rgba(0,0,0,0.3);
+        }
+        .bottom-panel .title { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+        .trip-list { display: flex; flex-direction: column; gap: 8px; }
+        .trip-item {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            background: var(--bg);
+            border-radius: 10px;
+        }
+        .trip-item .thumb {
+            width: 60px;
+            height: 60px;
+            border-radius: 8px;
+            background: linear-gradient(135deg, #1a1a2e, #16213e);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 24px;
+        }
+        .trip-item .info { flex: 1; }
+        .trip-item .name { font-size: 14px; font-weight: 500; margin-bottom: 4px; }
+        .trip-item .date { font-size: 12px; color: var(--text-secondary); }
+        .trip-item .cities { font-size: 11px; color: var(--text-light); }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">我的足迹</span>
+        <span class="add-btn"><i class="bi bi-plus-lg"></i> 记录</span>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-card">
+        <div class="stat">
+            <div class="stat-value">12</div>
+            <div class="stat-label">出行次数</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">28</div>
+            <div class="stat-label">打卡城市</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">86</div>
+            <div class="stat-label">足迹国家</div>
+        </div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-container">
+        <div class="map-bg"></div>
+
+        <!-- Connection Lines (细线) -->
+        <div class="connection-line">
+            <svg viewBox="0 0 100 100" preserveAspectRatio="none">
+                <!-- 北京到昆明 -->
+                <path d="M 45 25 Q 50 35 55 50" />
+                <!-- 昆明到大理 -->
+                <path d="M 55 50 Q 58 52 60 55" />
+                <!-- 大理到丽江 -->
+                <path d="M 60 55 Q 62 58 62 60" />
+                <!-- 北京到上海 -->
+                <path d="M 45 25 Q 50 22 55 20" />
+                <!-- 上海到杭州 -->
+                <path d="M 55 20 Q 58 22 60 25" />
+                <!-- 北京到西安 -->
+                <path d="M 45 25 Q 42 28 40 30" />
+                <!-- 西安到成都 -->
+                <path d="M 40 30 Q 38 35 42 40" />
+                <!-- 成都到重庆 -->
+                <path d="M 42 40 Q 45 42 48 42" />
+                <!-- 国内到国外 -->
+                <path d="M 55 50 Q 70 45 80 40" />
+                <path d="M 55 20 Q 70 15 85 10" />
+            </svg>
+        </div>
+
+        <!-- City Nodes (发光点) -->
+        <!-- 国内城市 -->
+        <div class="city-node" style="top: 25%; left: 45%;">
+            <div class="dot"></div>
+            <div class="label">北京</div>
+        </div>
+        <div class="city-node" style="top: 20%; left: 55%;">
+            <div class="dot"></div>
+            <div class="label">上海</div>
+        </div>
+        <div class="city-node" style="top: 25%; left: 60%;">
+            <div class="dot"></div>
+            <div class="label">杭州</div>
+        </div>
+        <div class="city-node" style="top: 30%; left: 40%;">
+            <div class="dot"></div>
+            <div class="label">西安</div>
+        </div>
+        <div class="city-node" style="top: 40%; left: 42%;">
+            <div class="dot"></div>
+            <div class="label">成都</div>
+        </div>
+        <div class="city-node" style="top: 42%; left: 48%;">
+            <div class="dot"></div>
+            <div class="label">重庆</div>
+        </div>
+        <div class="city-node" style="top: 50%; left: 55%;">
+            <div class="dot"></div>
+            <div class="label">昆明</div>
+        </div>
+        <div class="city-node" style="top: 55%; left: 60%;">
+            <div class="dot"></div>
+            <div class="label">大理</div>
+        </div>
+        <div class="city-node" style="top: 60%; left: 62%;">
+            <div class="dot"></div>
+            <div class="label">丽江</div>
+        </div>
+
+        <!-- 国外城市 -->
+        <div class="city-node" style="top: 40%; left: 80%;">
+            <div class="dot more"></div>
+            <div class="label">东京</div>
+        </div>
+        <div class="city-node" style="top: 15%; left: 85%;">
+            <div class="dot more"></div>
+            <div class="label">纽约</div>
+        </div>
+
+        <!-- Visited Tag -->
+        <div class="visited-tag">
+            <span class="dot"></span>
+            <span>点亮28个城市</span>
+        </div>
+    </div>
+
+    <!-- Recent Trips -->
+    <div class="bottom-panel">
+        <div class="title">最近行程</div>
+        <div class="trip-list">
+            <div class="trip-item">
+                <div class="thumb">🏔️</div>
+                <div class="info">
+                    <div class="name">云南5日游</div>
+                    <div class="cities">北京 → 昆明 → 大理 → 丽江</div>
+                    <div class="date">2024.02</div>
+                </div>
+            </div>
+            <div class="trip-item">
+                <div class="thumb">🌸</div>
+                <div class="info">
+                    <div class="name">江浙沪之旅</div>
+                    <div class="cities">北京 → 上海 → 杭州</div>
+                    <div class="date">2024.04</div>
+                </div>
+            </div>
+            <div class="trip-item">
+                <div class="thumb">🍜</div>
+                <div class="info">
+                    <div class="name">川渝美食行</div>
+                    <div class="cities">西安 → 成都 → 重庆</div>
+                    <div class="date">2023.10</div>
+                </div>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

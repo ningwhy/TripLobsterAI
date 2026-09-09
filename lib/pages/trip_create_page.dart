@@ -24,8 +24,11 @@ class _TripCreatePageState extends State<TripCreatePage> {
   List<Location> _locations = [];
   // 存储每段路程的路线信息
   Map<String, AmapRoute?> _routeInfo = {};
-  TransportCategory _defaultBigTransport = TransportCategory.big;
-  TransportCategory _defaultSmallTransport = TransportCategory.small;
+  TripMode _tripMode = TripMode.pureTransit;
+  TransportType _intercityPref = TransportType.flight;
+  TransportType _intraCityPref = TransportType.taxi;
+  /// 地点归属天（locationId → dayNumber）
+  final Map<String, int> _dayOfLocation = {};
   bool get _isEditing => widget.trip != null;
 
   @override
@@ -36,7 +39,13 @@ class _TripCreatePageState extends State<TripCreatePage> {
       _nameController.text = widget.trip!.name;
       _startDate = widget.trip!.startDate;
       _endDate = widget.trip!.endDate;
+      _tripMode = widget.trip!.tripMode;
       _locations = List.from(widget.trip!.allLocations);
+      for (final day in widget.trip!.days) {
+        for (final loc in day.locations) {
+          _dayOfLocation[loc.id] = day.dayNumber;
+        }
+      }
     }
   }
 
@@ -148,14 +157,21 @@ class _TripCreatePageState extends State<TripCreatePage> {
             margin: const EdgeInsets.only(top: 8),
             child: OutlinedButton.icon(
               onPressed: () async {
-                final result = await Navigator.push<Map<String, TransportCategory>>(
+                final result = await Navigator.push<Map<String, dynamic>>(
                   context,
-                  MaterialPageRoute(builder: (_) => const TransportPreferencePage()),
+                  MaterialPageRoute(
+                    builder: (_) => TransportPreferencePage(
+                      initialMode: _tripMode,
+                      initialIntercity: _intercityPref,
+                      initialIntraCity: _intraCityPref,
+                    ),
+                  ),
                 );
                 if (result != null) {
                   setState(() {
-                    _defaultBigTransport = result['bigTransport'] ?? TransportCategory.big;
-                    _defaultSmallTransport = result['smallTransport'] ?? TransportCategory.small;
+                    _tripMode = result['tripMode'] ?? _tripMode;
+                    _intercityPref = result['bigTransport'] ?? _intercityPref;
+                    _intraCityPref = result['smallTransport'] ?? _intraCityPref;
                   });
                   ScaffoldMessenger.of(context).showSnackBar(
                     const SnackBar(content: Text('交通偏好已设置')),
@@ -163,7 +179,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
                 }
               },
               icon: const Icon(Icons.directions_car, size: 18),
-              label: Text(_defaultBigTransport == TransportCategory.big ? '✈️ 飞机 + 🚕 打车' : '🚄 高铁 + 🚕 打车'),
+              label: Text(_tripModeLabel),
               style: OutlinedButton.styleFrom(
                 padding: const EdgeInsets.symmetric(vertical: 12),
                 shape: RoundedRectangleBorder(
@@ -234,53 +250,104 @@ class _TripCreatePageState extends State<TripCreatePage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text(
-                  '默认交通方式',
+                  '行程类型',
                   style: TextStyle(fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 12),
-                Row(
+                Wrap(
+                  spacing: 8,
                   children: [
-                    const Text('大交通: '),
-                    const SizedBox(width: 8),
                     ChoiceChip(
-                      label: const Text('✈️ 飞机'),
-                      selected: _defaultBigTransport == TransportCategory.big,
-                      onSelected: (_) => setState(
-                        () => _defaultBigTransport = TransportCategory.big,
-                      ),
+                      label: const Text('🚗 纯自驾'),
+                      selected: _tripMode == TripMode.pureDrive,
+                      onSelected: (_) => setState(() => _tripMode = TripMode.pureDrive),
                     ),
-                    const SizedBox(width: 8),
                     ChoiceChip(
-                      label: const Text('🚄 高铁'),
-                      selected: _defaultBigTransport == TransportCategory.small,
-                      onSelected: (_) => setState(
-                        () => _defaultBigTransport = TransportCategory.small,
-                      ),
+                      label: const Text('🚄 纯公共交通'),
+                      selected: _tripMode == TripMode.pureTransit,
+                      onSelected: (_) => setState(() => _tripMode = TripMode.pureTransit),
+                    ),
+                    ChoiceChip(
+                      label: const Text('🛬 公交+落地租车'),
+                      selected: _tripMode == TripMode.transitPlusRental,
+                      onSelected: (_) => setState(() => _tripMode = TripMode.transitPlusRental),
                     ),
                   ],
                 ),
-                const SizedBox(height: 8),
-                Row(
-                  children: [
-                    const Text('小交通: '),
-                    const SizedBox(width: 8),
-                    ChoiceChip(
-                      label: const Text('🚕 打车'),
-                      selected: _defaultSmallTransport == TransportCategory.small,
-                      onSelected: (_) => setState(
-                        () => _defaultSmallTransport = TransportCategory.small,
+                if (_tripMode != TripMode.pureDrive) ...[
+                  const SizedBox(height: 12),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(padding: EdgeInsets.only(top: 8), child: Text('跨城: ')),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('✈️ 飞机'),
+                              selected: _intercityPref == TransportType.flight,
+                              onSelected: (_) => setState(() => _intercityPref = TransportType.flight),
+                            ),
+                            ChoiceChip(
+                              label: const Text('🚄 高铁'),
+                              selected: _intercityPref == TransportType.highSpeedTrain,
+                              onSelected: (_) => setState(() => _intercityPref = TransportType.highSpeedTrain),
+                            ),
+                            ChoiceChip(
+                              label: const Text('🚌 大巴'),
+                              selected: _intercityPref == TransportType.bus,
+                              onSelected: (_) => setState(() => _intercityPref = TransportType.bus),
+                            ),
+                            ChoiceChip(
+                              label: const Text('⛴️ 轮船'),
+                              selected: _intercityPref == TransportType.ship,
+                              onSelected: (_) => setState(() => _intercityPref = TransportType.ship),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    ChoiceChip(
-                      label: const Text('🚇 地铁'),
-                      selected: _defaultSmallTransport == TransportCategory.big,
-                      onSelected: (_) => setState(
-                        () => _defaultSmallTransport = TransportCategory.big,
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      const Padding(padding: EdgeInsets.only(top: 8), child: Text('同城: ')),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Wrap(
+                          spacing: 8,
+                          runSpacing: 4,
+                          children: [
+                            ChoiceChip(
+                              label: const Text('🚕 打车'),
+                              selected: _intraCityPref == TransportType.taxi,
+                              onSelected: (_) => setState(() => _intraCityPref = TransportType.taxi),
+                            ),
+                            ChoiceChip(
+                              label: const Text('🚇 地铁'),
+                              selected: _intraCityPref == TransportType.subway,
+                              onSelected: (_) => setState(() => _intraCityPref = TransportType.subway),
+                            ),
+                            ChoiceChip(
+                              label: const Text('🚌 公交'),
+                              selected: _intraCityPref == TransportType.bus,
+                              onSelected: (_) => setState(() => _intraCityPref = TransportType.bus),
+                            ),
+                          ],
+                        ),
                       ),
-                    ),
-                  ],
-                ),
+                    ],
+                  ),
+                ] else
+                  const Padding(
+                    padding: EdgeInsets.only(top: 8),
+                    child: Text('纯自驾行程无交通枢纽，长距离将自动提示服务区',
+                        style: TextStyle(fontSize: 12, color: Colors.grey)),
+                  ),
               ],
             ),
           ),
@@ -448,11 +515,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
               mainAxisSize: MainAxisSize.min,
               children: [
                 Icon(
-                  location.transport!.type == TransportType.flight
-                      ? Icons.flight
-                      : location.transport!.type == TransportType.highSpeedTrain
-                          ? Icons.train
-                          : Icons.directions_bus,
+                  _transportIcon(location.transport!.type),
                   size: 16,
                   color: Colors.orange,
                 ),
@@ -523,6 +586,9 @@ class _TripCreatePageState extends State<TripCreatePage> {
     );
 
     if (result != null && result is Location) {
+      // 选择归属天（点+线模型：每个点归属某一天）
+      await _pickDayFor(result);
+
       // 如果有上一个地点，先计算路线
       if (_locations.isNotEmpty) {
         final previousLocation = _locations.last;
@@ -550,10 +616,20 @@ class _TripCreatePageState extends State<TripCreatePage> {
           );
         }
 
-        // 调用高德API计算驾车路线（无论同城还是跨城都用驾车）
+        // 计算路线：自驾类用驾车路线；纯公交模式同城优先公交路线
         if (previousLocation.longitude != null && previousLocation.latitude != null &&
             result.longitude != null && result.latitude != null) {
-          final route = await _amapService.drivingRoute(
+          AmapRoute? route;
+          if (_tripMode == TripMode.pureTransit && !isInterCity) {
+            route = await _amapService.transitRoute(
+              originLng: previousLocation.longitude!,
+              originLat: previousLocation.latitude!,
+              destinationLng: result.longitude!,
+              destinationLat: result.latitude!,
+              city: previousLocation.cityName,
+            );
+          }
+          route ??= await _amapService.drivingRoute(
             originLng: previousLocation.longitude!,
             originLat: previousLocation.latitude!,
             destinationLng: result.longitude!,
@@ -569,10 +645,10 @@ class _TripCreatePageState extends State<TripCreatePage> {
             result.transportMinutes = route.duration;
             // 保存默认交通方式（根据同城/跨城设置）
             result.transport = Transport(
-              type: isInterCity
-                  ? (_defaultBigTransport == TransportCategory.big ? TransportType.flight : TransportType.highSpeedTrain)
-                  : TransportType.taxi,
-              category: isInterCity ? TransportCategory.big : TransportCategory.small,
+              type: _tripMode == TripMode.pureDrive
+                  ? TransportType.selfDrive
+                  : (isInterCity ? _intercityPref : _intraCityPref),
+              scope: isInterCity ? TransportScope.intercity : TransportScope.intraCity,
               durationMinutes: route.duration,
               distance: route.distance.toDouble(),
             );
@@ -644,7 +720,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
                 to.transport = Transport(
                   id: transport.id,
                   type: transport.type,
-                  category: transport.category,
+                  scope: transport.scope,
                   flightNumber: transport.flightNumber,
                   departureTime: depTime,
                   arrivalTime: '${arrivalHour.toString().padLeft(2, '0')}:${arrivalMinute.toString().padLeft(2, '0')}',
@@ -657,6 +733,28 @@ class _TripCreatePageState extends State<TripCreatePage> {
         },
       ),
     );
+  }
+
+  IconData _transportIcon(TransportType type) {
+    switch (type) {
+      case TransportType.flight:
+        return Icons.flight;
+      case TransportType.highSpeedTrain:
+      case TransportType.train:
+        return Icons.train;
+      case TransportType.ship:
+        return Icons.directions_boat;
+      case TransportType.selfDrive:
+        return Icons.directions_car;
+      case TransportType.taxi:
+        return Icons.local_taxi;
+      case TransportType.subway:
+        return Icons.subway;
+      case TransportType.walk:
+        return Icons.directions_walk;
+      default:
+        return Icons.directions_bus;
+    }
   }
 
   IconData _getTypeIcon(LocationType type) {
@@ -707,6 +805,62 @@ class _TripCreatePageState extends State<TripCreatePage> {
     }
   }
 
+  String get _tripModeLabel {
+    switch (_tripMode) {
+      case TripMode.pureDrive:
+        return '🚗 纯自驾';
+      case TripMode.transitPlusRental:
+        return '🛬 公交+落地租车';
+      case TripMode.pureTransit:
+        final big = _intercityPref == TransportType.flight
+            ? '✈️ 飞机'
+            : (_intercityPref == TransportType.ship
+                ? '⛴️ 轮船'
+                : (_intercityPref == TransportType.bus ? '🚌 大巴' : '🚄 高铁'));
+        final small = _intraCityPref == TransportType.subway
+            ? '🚇 地铁'
+            : (_intraCityPref == TransportType.bus ? '🚌 公交' : '🚕 打车');
+        return '$big + $small';
+    }
+  }
+
+  Future<void> _pickDayFor(Location loc) async {
+    final dayCount = _endDate.difference(_startDate).inDays + 1;
+    if (dayCount <= 1) {
+      _dayOfLocation[loc.id] = 1;
+      return;
+    }
+    if (!mounted) return;
+    final picked = await showModalBottomSheet<int>(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Text('添加到哪一天？', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+            ),
+            ...List.generate(dayCount, (i) {
+              final date = _startDate.add(Duration(days: i));
+              return ListTile(
+                leading: CircleAvatar(
+                  backgroundColor: const Color(0xFFE2F3DA),
+                  child: Text('${i + 1}', style: const TextStyle(color: Color(0xFF4CA84A), fontWeight: FontWeight.bold)),
+                ),
+                title: Text('第${i + 1}天 · ${date.month}/${date.day}'),
+                onTap: () => Navigator.pop(ctx, i + 1),
+              );
+            }),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+    _dayOfLocation[loc.id] = picked ?? 1;
+  }
+
   void _saveTrip() {
     if (_nameController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -715,47 +869,33 @@ class _TripCreatePageState extends State<TripCreatePage> {
       return;
     }
 
-    // 创建行程天数
+    // 按“地点归属天”构建天数（点+线模型：点归属到天，线连接点）
+    final dayCount = _endDate.difference(_startDate).inDays + 1;
+    final fallbackDay = _isEditing ? dayCount : 1;
     final days = <TripDay>[];
-    var currentDate = _startDate;
-    var dayNumber = 1;
-    while (!currentDate.isAfter(_endDate)) {
+    for (var i = 0; i < dayCount; i++) {
+      final dayNumber = i + 1;
       days.add(TripDay(
-        date: currentDate,
+        date: _startDate.add(Duration(days: i)),
         dayNumber: dayNumber,
         locations: _locations
-            .where((l) => l.city == '${dayNumber}日城市') // TODO: 根据实际逻辑分配
+            .where((l) => ((_dayOfLocation[l.id] ?? fallbackDay).clamp(1, dayCount)) == dayNumber)
             .toList(),
       ));
-      currentDate = currentDate.add(const Duration(days: 1));
-      dayNumber++;
     }
 
     if (_isEditing) {
-      // 更新现有行程
+      // 更新现有行程（保留地点归属，不再清空）
       final updatedTrip = widget.trip!;
       updatedTrip.name = _nameController.text;
       updatedTrip.startDate = _startDate;
       updatedTrip.endDate = _endDate;
-      // 重新创建行程天数
-      final newDays = <TripDay>[];
-      var currentDate = _startDate;
-      var dayNumber = 1;
-      while (!currentDate.isAfter(_endDate)) {
-        newDays.add(TripDay(
-          date: currentDate,
-          dayNumber: dayNumber,
-          locations: [],
-        ));
-        currentDate = currentDate.add(const Duration(days: 1));
-        dayNumber++;
-      }
-      updatedTrip.days = newDays;
+      updatedTrip.tripMode = _tripMode;
+      updatedTrip.days = days;
 
       context.read<TripProvider>().updateTrip(updatedTrip);
 
       Navigator.pop(context);
-      Navigator.pop(context); // 返回首页
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('行程更新成功')),
       );
@@ -767,6 +907,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
         endDate: _endDate,
         days: days,
         homeLocation: context.read<TripProvider>().homeLocation,
+        tripMode: _tripMode,
       );
 
       context.read<TripProvider>().createTrip(trip);

@@ -1,0 +1,7 @@
+<!-- pages/map/map.wxml -->
+<view class="container">
+  <view class="coming-soon">
+    <text>🗺</text>
+    <view>地图功能即将上线</view>
+  </view>
+</view>

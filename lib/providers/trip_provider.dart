@@ -2,6 +2,8 @@ import 'package:flutter/foundation.dart';
 import '../models/trip_models.dart';
 import '../services/storage_service.dart';
 import '../services/api_client.dart';
+import '../services/amap_service.dart';
+import '../utils/poi_classifier.dart';
 
 class TripProvider extends ChangeNotifier {
   final StorageService _storage;
@@ -172,46 +174,69 @@ class TripProvider extends ChangeNotifier {
   /// 返回 true 表示需要弹出交通选择弹窗
   bool needsInterCityTransport(Location? previousLocation, Location newLocation) {
     if (previousLocation == null) return false;
-    return previousLocation.city != newLocation.city;
+    return previousLocation.cityName != newLocation.cityName;
   }
 
-  /// 为行程添加跨城交通
-  /// 自动添加：家 -> 机场/车站 -> 目的地机场/车站 -> 酒店
-  List<Location> addInterCityTransport(
+  /// 为跨城段插入真实交通枢纽（点+线模型：公共交通跨城线两端需枢纽点）
+  /// 纯自驾：无枢纽；公交+落地租车：到达城市额外插入租车点（枢纽子类型 rental）
+  Future<List<Location>> addInterCityTransport(
     Location fromLocation,
     Location toLocation,
-    Transport transport,
-  ) {
-    final List<Location> result = [];
+    Transport transport, {
+    TripMode tripMode = TripMode.pureTransit,
+  }) async {
+    final result = <Location>[fromLocation];
 
-    // TODO: 调用高德API获取机场/车站信息
-    // 这里简化处理，实际需要根据城市获取最近机场/车站
-
-    // 添加起点
-    result.add(fromLocation);
-
-    // 如果是大交通，添加交通枢纽
-    if (transport.isBigTransport) {
-      // 添加出发城市交通枢纽
-      result.add(Location(
-        name: '出发地交通枢纽',
-        address: '${fromLocation.city}交通枢纽',
-        type: LocationType.transport,
-        isAutoAdded: true,
-      ));
-
-      // 添加到达城市交通枢纽
-      result.add(Location(
-        name: '到达地交通枢纽',
-        address: '${toLocation.city}交通枢纽',
-        type: LocationType.transport,
-        isAutoAdded: true,
-      ));
+    if (transport.isIntercity && tripMode != TripMode.pureDrive) {
+      final amap = AmapService();
+      final kind = PoiClassifier.hubKindForTransport(transport.type);
+      final kw = PoiClassifier.hubKindLabel(kind); // 机场/火车站/汽车站/港口
+      final dep = await _findHub(amap, fromLocation.cityName, kw);
+      result.add(dep ?? _fallbackHub(fromLocation.cityName, kw, kind));
+      final arr = await _findHub(amap, toLocation.cityName, kw);
+      result.add(arr ?? _fallbackHub(toLocation.cityName, kw, kind));
+      if (tripMode == TripMode.transitPlusRental) {
+        final rental = await _findHub(amap, toLocation.cityName, '租车');
+        result.add(rental ??
+            Location(
+              name: '${toLocation.cityName}租车点',
+              address: toLocation.cityName,
+              type: LocationType.transport,
+              hubKind: 'rental',
+              isAutoAdded: true,
+              stayMinutes: 30,
+            ));
+      }
     }
 
-    // 添加目的地
     result.add(toLocation);
-
     return result;
   }
+
+  Future<Location?> _findHub(AmapService amap, String city, String keyword) async {
+    final pois = await amap.searchPoi(keyword, city: city);
+    if (pois.isEmpty) return null;
+    final p = pois.first;
+    return Location(
+      name: p.name,
+      address: p.address,
+      latitude: p.lat,
+      longitude: p.lng,
+      city: p.city,
+      district: p.district,
+      type: LocationType.transport,
+      hubKind: keyword == '租车' ? 'rental' : PoiClassifier.hubKindOf(p.typecode),
+      isAutoAdded: true,
+      stayMinutes: 45,
+    );
+  }
+
+  Location _fallbackHub(String city, String label, String? kind) => Location(
+    name: '$city$label',
+    address: city,
+    type: LocationType.transport,
+    hubKind: kind,
+    isAutoAdded: true,
+    stayMinutes: 45,
+  );
 }

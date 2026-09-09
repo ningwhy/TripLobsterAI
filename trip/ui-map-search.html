@@ -1,0 +1,397 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>地图找地点 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+        }
+
+        /* Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+
+        /* Search Bar */
+        .search-bar {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .search-bar .input-wrap {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            background: var(--bg);
+            border-radius: 20px;
+            padding: 8px 14px;
+        }
+        .search-bar .input-wrap i { color: var(--text-light); margin-right: 8px; }
+        .search-bar input {
+            flex: 1;
+            border: none;
+            background: none;
+            font-size: 14px;
+            outline: none;
+        }
+        .search-bar .filter-btn {
+            width: 36px;
+            height: 36px;
+            border-radius: 50%;
+            border: none;
+            background: var(--bg);
+            font-size: 18px;
+            cursor: pointer;
+        }
+
+        /* Type Tags */
+        .type-tags {
+            background: var(--card-bg);
+            padding: 0 16px 12px;
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+        }
+        .type-tags::-webkit-scrollbar { display: none; }
+        .type-tag {
+            padding: 6px 14px;
+            border-radius: 16px;
+            font-size: 12px;
+            white-space: nowrap;
+            cursor: pointer;
+            border: 1px solid var(--border);
+            background: var(--bg);
+            color: var(--text-secondary);
+        }
+        .type-tag.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+
+        /* Map */
+        .map-container {
+            height: 280px;
+            background: #E5E5E5;
+            position: relative;
+        }
+        .map-placeholder {
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(135deg, #e8f4e8 0%, #d4e9d4 100%);
+            position: relative;
+        }
+        /* 模拟地图元素 */
+        .map-road {
+            position: absolute;
+            background: rgba(255,255,255,0.7);
+        }
+        .map-road.h1 { top: 30%; left: 0; right: 0; height: 15px; }
+        .map-road.h2 { top: 60%; left: 10%; right: 30%; height: 20px; }
+        .map-road.v1 { left: 40%; top: 10%; bottom: 20%; width: 15px; }
+        .map-road.v2 { left: 70%; top: 30%; bottom: 50%; width: 18px; }
+
+        /* POI Markers */
+        .poi-marker {
+            position: absolute;
+            transform: translate(-50%, -100%);
+            cursor: pointer;
+            z-index: 10;
+        }
+        .poi-marker .pin {
+            width: 32px;
+            height: 32px;
+            border-radius: 50% 50% 50% 0;
+            transform: rotate(-45deg);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 3px 8px rgba(0,0,0,0.3);
+        }
+        .poi-marker .pin i { transform: rotate(45deg); font-size: 14px; }
+        .poi-marker.selected .pin {
+            width: 40px;
+            height: 40px;
+        }
+        .poi-marker.selected .pin i { font-size: 18px; }
+
+        /* Current Location */
+        .current-loc {
+            position: absolute;
+            bottom: 16px;
+            right: 16px;
+            width: 44px;
+            height: 44px;
+            background: white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.2);
+            font-size: 20px;
+            cursor: pointer;
+        }
+
+        /* Current Time Card */
+        .time-card {
+            background: var(--card-bg);
+            margin: 12px 16px;
+            border-radius: 10px;
+            padding: 10px 14px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .time-card .label { font-size: 12px; color: var(--text-secondary); }
+        .time-card .time { font-size: 15px; font-weight: 600; color: var(--primary); }
+
+        /* POI List */
+        .poi-list {
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            overflow: hidden;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+        }
+        .poi-list .title {
+            padding: 12px 16px;
+            font-size: 14px;
+            font-weight: 600;
+            border-bottom: 1px solid var(--border);
+        }
+        .poi-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 16px;
+            border-bottom: 1px solid var(--border);
+            cursor: pointer;
+        }
+        .poi-item:last-child { border-bottom: none; }
+        .poi-item.selected { background: var(--primary-light); }
+        .poi-item .icon {
+            width: 40px;
+            height: 40px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 18px;
+            margin-right: 12px;
+        }
+        .poi-item .info { flex: 1; }
+        .poi-item .info .name { font-size: 14px; font-weight: 500; margin-bottom: 2px; }
+        .poi-item .info .meta { font-size: 12px; color: var(--text-secondary); }
+        .poi-item .distance { font-size: 12px; color: var(--text-light); }
+        .poi-item .rating { font-size: 12px; color: #FF9800; margin-left: 8px; }
+
+        /* Bottom Button */
+        .bottom-button {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            padding: 16px;
+            background: var(--card-bg);
+            box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
+            display: flex;
+            gap: 12px;
+        }
+        .bottom-button button {
+            flex: 1;
+            padding: 14px;
+            border-radius: 24px;
+            border: none;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+        .bottom-button .btn-cancel {
+            background: var(--bg);
+            color: var(--text-secondary);
+        }
+        .bottom-button .btn-confirm {
+            background: linear-gradient(135deg, var(--primary), #6BB3F0);
+            color: white;
+        }
+
+        /* Type Colors */
+        .type-attraction { background: #FFEBEE; }
+        .type-restaurant { background: #FFF3E0; }
+        .type-hotel { background: #F3E5F5; }
+        .type-shopping { background: #E8F5E9; }
+        .type-transport { background: #E3F2FD; }
+
+        .poi-marker.type-attraction .pin { background: #E74C3C; color: white; }
+        .poi-marker.type-restaurant .pin { background: #F39C12; color: white; }
+        .poi-marker.type-hotel .pin { background: #9B59B6; color: white; }
+        .poi-marker.type-shopping .pin { background: #2ECC71; color: white; }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">地图找地点</span>
+    </div>
+
+    <!-- Search Bar -->
+    <div class="search-bar">
+        <div class="input-wrap">
+            <i class="bi bi-search"></i>
+            <input type="text" placeholder="搜索地点名称">
+        </div>
+        <button class="filter-btn"><i class="bi bi-sliders"></i></button>
+    </div>
+
+    <!-- Type Tags -->
+    <div class="type-tags">
+        <div class="type-tag active" onclick="selectType(this, 'all')">不限</div>
+        <div class="type-tag" onclick="selectType(this, 'attraction')">景点</div>
+        <div class="type-tag" onclick="selectType(this, 'restaurant')">餐饮</div>
+        <div class="type-tag" onclick="selectType(this, 'hotel')">酒店</div>
+        <div class="type-tag" onclick="selectType(this, 'shopping')">购物</div>
+        <div class="type-tag" onclick="selectType(this, 'transport')">交通</div>
+    </div>
+
+    <!-- Map -->
+    <div class="map-container">
+        <div class="map-placeholder">
+            <!-- 模拟道路 -->
+            <div class="map-road h1"></div>
+            <div class="map-road h2"></div>
+            <div class="map-road v1"></div>
+            <div class="map-road v2"></div>
+
+            <!-- POI Markers -->
+            <div class="poi-marker type-attraction" style="top: 35%; left: 40%;" onclick="selectPOI(this, 1)">
+                <div class="pin"><i>🎢</i></div>
+            </div>
+            <div class="poi-marker type-restaurant" style="top: 45%; left: 55%;" onclick="selectPOI(this, 2)">
+                <div class="pin"><i>🍽️</i></div>
+            </div>
+            <div class="poi-marker type-hotel selected" style="top: 55%; left: 70%;" onclick="selectPOI(this, 3)">
+                <div class="pin"><i>🏨</i></div>
+            </div>
+            <div class="poi-marker type-shopping" style="top: 40%; left: 75%;" onclick="selectPOI(this, 4)">
+                <div class="pin"><i>🛍️</i></div>
+            </div>
+
+            <!-- Current Location Button -->
+            <div class="current-loc" onclick="locate()">
+                <i class="bi bi-crosshair"></i>
+            </div>
+        </div>
+    </div>
+
+    <!-- Time Card -->
+    <div class="time-card">
+        <span class="label">预计到达时间</span>
+        <span class="time" id="arrivalTime">15:30</span>
+    </div>
+
+    <!-- POI List -->
+    <div class="poi-list">
+        <div class="title">附近地点</div>
+        <div class="poi-item" onclick="selectPOI(this, 1)">
+            <div class="icon type-attraction">🎢</div>
+            <div class="info">
+                <div class="name">北京欢乐谷</div>
+                <div class="meta">游乐场 · 4.5km</div>
+            </div>
+            <span class="rating">4.5★</span>
+        </div>
+        <div class="poi-item" onclick="selectPOI(this, 2)">
+            <div class="icon type-restaurant">🍽️</div>
+            <div class="info">
+                <div class="name">全聚德烤鸭店</div>
+                <div class="meta">中餐 · 3.2km</div>
+            </div>
+            <span class="rating">4.6★</span>
+        </div>
+        <div class="poi-item selected" onclick="selectPOI(this, 3)">
+            <div class="icon type-hotel">🏨</div>
+            <div class="info">
+                <div class="name">北京王府半岛酒店</div>
+                <div class="meta">五星级酒店 · 2.8km</div>
+            </div>
+            <span class="rating">4.8★</span>
+        </div>
+        <div class="poi-item" onclick="selectPOI(this, 4)">
+            <div class="icon type-shopping">🛍️</div>
+            <div class="info">
+                <div class="name">王府井步行街</div>
+                <div class="meta">购物中心 · 1.5km</div>
+            </div>
+            <span class="rating">4.3★</span>
+        </div>
+    </div>
+
+    <div style="height: 100px;"></div>
+
+    <!-- Bottom Button -->
+    <div class="bottom-button">
+        <button class="btn-cancel">取消</button>
+        <button class="btn-confirm">添加地点</button>
+    </div>
+
+    <script>
+        let selectedPOI = 3;
+
+        function selectType(el, type) {
+            document.querySelectorAll('.type-tag').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+        }
+
+        function selectPOI(el, id) {
+            selectedPOI = id;
+            document.querySelectorAll('.poi-item').forEach(i => i.classList.remove('selected'));
+            document.querySelectorAll('.poi-marker').forEach(m => m.classList.remove('selected'));
+            el.classList.add('selected');
+
+            // 找到对应的marker并选中
+            const markers = document.querySelectorAll('.poi-marker');
+            if (markers[id-1]) {
+                markers[id-1].classList.add('selected');
+            }
+
+            // 更新到达时间（模拟）
+            const times = ['14:00', '14:30', '15:30', '16:00'];
+            document.getElementById('arrivalTime').textContent = times[id-1] || '15:30';
+        }
+
+        function locate() {
+            alert('定位中...\n\n实际项目中调用高德/百度地图SDK获取当前位置');
+        }
+    </script>
+</body>
+</html>

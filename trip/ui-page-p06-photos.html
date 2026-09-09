@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>照片管理 - UI原型</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <style>
+        :root {
+            --primary: #4A90D9;
+            --primary-light: #E3F2FD;
+            --bg: #F5F5F5;
+            --card-bg: #FFFFFF;
+            --text-main: #333333;
+            --text-secondary: #666666;
+            --text-light: #999999;
+            --border: #E0E0E0;
+            --success: #2ECC71;
+        }
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background: var(--bg);
+            color: var(--text-main);
+            min-height: 100vh;
+            padding-bottom: 70px;
+        }
+
+        /* Header */
+        .app-header {
+            background: var(--card-bg);
+            padding: 12px 16px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+        }
+        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
+        .app-header .title { font-size: 17px; font-weight: 600; }
+        .app-header .action { font-size: 14px; color: var(--primary); }
+
+        /* Permission Card */
+        .permission-card {
+            background: var(--card-bg);
+            margin: 16px;
+            border-radius: 16px;
+            padding: 24px;
+            text-align: center;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+        }
+        .permission-card .icon {
+            font-size: 48px;
+            margin-bottom: 16px;
+        }
+        .permission-card .title {
+            font-size: 18px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+        .permission-card .desc {
+            font-size: 14px;
+            color: var(--text-secondary);
+            margin-bottom: 20px;
+            line-height: 1.5;
+        }
+        .permission-card button {
+            padding: 12px 32px;
+            border-radius: 24px;
+            border: none;
+            background: var(--primary);
+            color: white;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        /* Stats */
+        .stats-bar {
+            display: flex;
+            background: var(--card-bg);
+            margin: 0 16px 16px;
+            border-radius: 12px;
+            padding: 16px;
+            gap: 20px;
+        }
+        .stats-bar .stat {
+            flex: 1;
+            text-align: center;
+        }
+        .stats-bar .stat-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: var(--primary);
+        }
+        .stats-bar .stat-label {
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Location Photos */
+        .location-section {
+            background: var(--card-bg);
+            margin: 0 16px 12px;
+            border-radius: 12px;
+            overflow: hidden;
+        }
+        .location-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 14px;
+            border-bottom: 1px solid var(--border);
+        }
+        .location-header .info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .location-header .icon {
+            width: 32px;
+            height: 32px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 16px;
+        }
+        .location-header .name {
+            font-size: 15px;
+            font-weight: 500;
+        }
+        .location-header .count {
+            font-size: 12px;
+            color: var(--text-light);
+        }
+        .location-header .time {
+            font-size: 12px;
+            color: var(--primary);
+        }
+
+        /* Photo Grid */
+        .photo-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 2px;
+            padding: 2px;
+        }
+        .photo-grid .photo {
+            aspect-ratio: 1;
+            background: var(--bg);
+            border-radius: 4px;
+            overflow: hidden;
+            position: relative;
+        }
+        .photo-grid .photo img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+        .photo-grid .photo .date {
+            position: absolute;
+            bottom: 4px;
+            right: 4px;
+            background: rgba(0,0,0,0.6);
+            color: white;
+            font-size: 10px;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+
+        /* Map Toggle */
+        .map-section {
+            background: var(--card-bg);
+            margin: 16px;
+            border-radius: 16px;
+            overflow: hidden;
+        }
+        .map-header {
+            padding: 14px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        .map-header .title {
+            font-size: 15px;
+            font-weight: 600;
+        }
+        .map-tabs {
+            display: flex;
+            background: var(--bg);
+            border-radius: 8px;
+            padding: 2px;
+        }
+        .map-tabs .tab {
+            flex: 1;
+            text-align: center;
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            cursor: pointer;
+        }
+        .map-tabs .tab.active {
+            background: var(--card-bg);
+            font-weight: 500;
+        }
+
+        .map-preview {
+            height: 200px;
+            background: linear-gradient(135deg, #E8F5E9 0%, #C8E6C9 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            overflow: hidden;
+        }
+        /* Cartoon Map Style */
+        .cartoon-map {
+            position: relative;
+            width: 100%;
+            height: 100%;
+        }
+        .cartoon-map .route-line {
+            position: absolute;
+            top: 50%;
+            left: 10%;
+            right: 10%;
+            height: 4px;
+            background: repeating-linear-gradient(90deg, var(--primary) 0, var(--primary) 10px, transparent 10px, transparent 20px);
+            transform: translateY(-50%);
+            border-radius: 2px;
+        }
+        .cartoon-map .point {
+            position: absolute;
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 20px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            transform: translate(-50%, -50%);
+            cursor: pointer;
+        }
+        .cartoon-map .point .tooltip {
+            position: absolute;
+            bottom: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: white;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 10px;
+            white-space: nowrap;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            opacity: 0;
+            transition: opacity 0.2s;
+        }
+        .cartoon-map .point:hover .tooltip {
+            opacity: 1;
+        }
+        .cartoon-map .time-label {
+            position: absolute;
+            font-size: 10px;
+            background: white;
+            padding: 2px 6px;
+            border-radius: 4px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+
+        /* Real Map Style */
+        .real-map {
+            background: #E5E5E5;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+        .real-map::before {
+            content: '🗺️ 真实地图区域';
+            font-size: 14px;
+        }
+
+        /* Bottom Nav */
+        .bottom-nav {
+            position: fixed;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            background: var(--card-bg);
+            display: flex;
+            border-top: 1px solid var(--border);
+            padding: 8px 0;
+        }
+        .bottom-nav .nav-item {
+            flex: 1;
+            text-align: center;
+            font-size: 10px;
+            color: var(--text-light);
+            cursor: pointer;
+        }
+        .bottom-nav .nav-item.active {
+            color: var(--primary);
+        }
+        .bottom-nav .nav-item i {
+            font-size: 20px;
+            display: block;
+            margin-bottom: 2px;
+        }
+
+        /* Type Colors */
+        .type-transport { background: var(--primary); color: white; }
+        .type-hotel { background: #9B59B6; color: white; }
+        .type-attraction { background: #E74C3C; color: white; }
+        .type-restaurant { background: #F39C12; color: white; }
+        .type-shopping { background: #2ECC71; color: white; }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="app-header">
+        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
+        <span class="title">旅行相册</span>
+        <span class="action">管理</span>
+    </div>
+
+    <!-- Permission Card -->
+    <div class="permission-card">
+        <div class="icon">📸</div>
+        <div class="title">开启旅行相册</div>
+        <div class="desc">授权后，我们将根据照片的拍摄时间和位置，自动将旅行照片归类到对应的行程地点</div>
+        <button onclick="requestPermission()">授权访问相册</button>
+    </div>
+
+    <!-- Stats -->
+    <div class="stats-bar">
+        <div class="stat">
+            <div class="stat-value">128</div>
+            <div class="stat-label">总照片</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">7</div>
+            <div class="stat-label">已归类</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">3</div>
+            <div class="stat-label">行程地点</div>
+        </div>
+    </div>
+
+    <!-- Location Photos -->
+    <div class="location-section">
+        <div class="location-header">
+            <div class="info">
+                <div class="icon type-attraction">🎢</div>
+                <div>
+                    <div class="name">北京欢乐谷</div>
+                    <div class="count">12张照片</div>
+                </div>
+            </div>
+            <div class="time">09:30 到达</div>
+        </div>
+        <div class="photo-grid">
+            <div class="photo"><img src="https://picsum.photos/200/200?random=1" alt=""><span class="date">09:32</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=2" alt=""><span class="date">09:45</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=3" alt=""><span class="date">10:15</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=4" alt=""><span class="date">11:00</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=5" alt=""><span class="date">12:30</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=6" alt=""><span class="date">13:20</span></div>
+        </div>
+    </div>
+
+    <div class="location-section">
+        <div class="location-header">
+            <div class="info">
+                <div class="icon type-hotel">🏨</div>
+                <div>
+                    <div class="name">北京王府半岛酒店</div>
+                    <div class="count">8张照片</div>
+                </div>
+            </div>
+            <div class="time">16:00 入住</div>
+        </div>
+        <div class="photo-grid">
+            <div class="photo"><img src="https://picsum.photos/200/200?random=7" alt=""><span class="date">16:15</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=8" alt=""><span class="date">18:30</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=9" alt=""><span class="date">20:00</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=10" alt=""><span class="date">21:15</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=11" alt=""></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=12" alt=""></div>
+        </div>
+    </div>
+
+    <div class="location-section">
+        <div class="location-header">
+            <div class="info">
+                <div class="icon type-restaurant">🍽️</div>
+                <div>
+                    <div class="name">全聚德烤鸭店</div>
+                    <div class="count">6张照片</div>
+                </div>
+            </div>
+            <div class="time">12:00 到达</div>
+        </div>
+        <div class="photo-grid">
+            <div class="photo"><img src="https://picsum.photos/200/200?random=13" alt=""><span class="date">12:05</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=14" alt=""><span class="date">12:30</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=15" alt=""><span class="date">13:00</span></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=16" alt=""></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=17" alt=""></div>
+            <div class="photo"><img src="https://picsum.photos/200/200?random=18" alt=""></div>
+        </div>
+    </div>
+
+    <!-- Map Section -->
+    <div class="map-section">
+        <div class="map-header">
+            <span class="title">行程地图</span>
+            <div class="map-tabs">
+                <div class="tab active" onclick="switchMap(this, 'cartoon')">示意图</div>
+                <div class="tab" onclick="switchMap(this, 'real')">真实地图</div>
+            </div>
+        </div>
+        <div class="map-preview" id="mapPreview">
+            <!-- Cartoon Map -->
+            <div class="cartoon-map" id="cartoonMap">
+                <div class="route-line"></div>
+
+                <div class="point" style="top:30%; left:15%; background:#4A90D9;">
+                    ✈️
+                    <div class="tooltip">首都机场 08:00</div>
+                </div>
+
+                <div class="point" style="top:45%; left:35%; background:#E74C3C;">
+                    🎢
+                    <div class="tooltip">欢乐谷 09:30</div>
+                </div>
+                <div class="time-label" style="top:52%; left:35%;">+1h</div>
+
+                <div class="point" style="top:55%; left:55%; background:#F39C12;">
+                    🍽️
+                    <div class="tooltip">全聚德 12:00</div>
+                </div>
+                <div class="time-label" style="top:62%; left:55%;">+2.5h</div>
+
+                <div class="point" style="top:50%; left:75%; background:#9B59B6;">
+                    🏨
+                    <div class="tooltip">王府半岛酒店 16:00</div>
+                </div>
+                <div class="time-label" style="top:57%; left:75%;">+4h</div>
+
+                <div class="point" style="top:65%; left:90%; background:#4A90D9;">
+                    ✈️
+                    <div class="tooltip">返程 13:00</div>
+                </div>
+            </div>
+
+            <!-- Real Map (hidden) -->
+            <div class="real-map" id="realMap" style="display:none;"></div>
+        </div>
+    </div>
+
+    <div style="height: 20px;"></div>
+
+    <script>
+        function requestPermission() {
+            alert('请求相册权限...\n\n实际项目中将调用Flutter相册权限API');
+        }
+
+        function switchMap(el, type) {
+            document.querySelectorAll('.map-tabs .tab').forEach(t => t.classList.remove('active'));
+            el.classList.add('active');
+            document.getElementById('cartoonMap').style.display = type === 'cartoon' ? 'block' : 'none';
+            document.getElementById('realMap').style.display = type === 'real' ? 'flex' : 'none';
+        }
+    </script>
+</body>
+</html>

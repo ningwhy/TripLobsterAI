@@ -1,0 +1,230 @@
+<!-- pages/input/input.wxml - 分步引导式 -->
+<view class="container">
+
+  <!-- 进度条（确认页不显示） -->
+  <view class="progress-bar" wx:if="{{step < 99}}">
+    <view class="progress-track">
+      <view class="progress-fill" style="width: {{(step / (totalSteps-1)) * 100}}%"></view>
+    </view>
+    <view class="progress-text">{{step + 1}} / {{totalSteps}}</view>
+  </view>
+
+  <!-- ───────────── Step 0: 目的地 ───────────── -->
+  <view class="step-view" wx:if="{{step === 0}}">
+    <view class="step-emoji">🗺</view>
+    <view class="step-title">想去哪里玩？</view>
+    <view class="step-sub">输入目的地城市或景区</view>
+    <input class="big-input" placeholder="例如：云南昆明、西藏拉萨"
+           value="{{form.destination}}" bindinput="onDestinationInput"
+           focus="{{true}}" />
+    <view class="hot-tags">
+      <view class="hot-label">热门目的地</view>
+      <view class="tags">
+        <view class="tag {{form.destination == item ? 'active' : ''}}"
+              wx:for="{{hotDestinations}}" wx:key="*this"
+              bindtap="selectHotDest" data-dest="{{item}}">{{item}}</view>
+      </view>
+    </view>
+    <button class="btn-next" bindtap="nextStep">下一步 →</button>
+  </view>
+
+  <!-- ───────────── Step 1: 出发地 ───────────── -->
+  <view class="step-view" wx:if="{{step === 1}}">
+    <view class="step-emoji">🏠</view>
+    <view class="step-title">从哪里出发？</view>
+    <view class="step-sub">已自动定位，可手动修改</view>
+    <input class="big-input" placeholder="例如：上海、北京"
+           value="{{form.departure}}" bindinput="onDepartureInput" focus="{{true}}" />
+    <view class="btn-row">
+      <button class="btn-back" bindtap="prevStep">← 返回</button>
+      <button class="btn-next flex1" bindtap="nextStep">下一步 →</button>
+    </view>
+  </view>
+
+  <!-- ───────────── Step 2: 出行方式 ───────────── -->
+  <view class="step-view" wx:if="{{step === 2}}">
+    <view class="step-emoji">🚀</view>
+    <view class="step-title">怎么去？</view>
+    <view class="step-sub">选择主要交通方式</view>
+    <view class="transport-cards">
+      <view class="transport-card {{form.transportMode == item.value ? 'active' : ''}}"
+            wx:for="{{transportOptions}}" wx:key="value"
+            bindtap="selectTransport" data-value="{{item.value}}">
+        <view class="tc-icon">{{item.icon}}</view>
+        <view class="tc-label">{{item.label}}</view>
+        <view class="tc-desc">{{item.desc}}</view>
+      </view>
+    </view>
+    <button class="btn-back mt20" bindtap="prevStep">← 返回</button>
+  </view>
+
+  <!-- ───────────── Step 3: 自驾详情（仅自驾） ───────────── -->
+  <view class="step-view" wx:if="{{step === 3}}">
+    <view class="step-emoji">🚗</view>
+    <view class="step-title">自驾详情</view>
+    <view class="step-sub">帮助我更精准规划行程</view>
+
+    <view class="section-label">司机人数</view>
+    <view class="option-row">
+      <view class="option-btn {{form.driverCount == 1 ? 'active' : ''}}"
+            bindtap="selectDriverCount" data-count="{{1}}">1人驾驶</view>
+      <view class="option-btn {{form.driverCount == 2 ? 'active' : ''}}"
+            bindtap="selectDriverCount" data-count="{{2}}">2人轮换</view>
+    </view>
+
+    <view class="section-label mt24">是否走高速？</view>
+    <switch checked="{{form.useHighway}}" bindchange="toggleHighway" color="#4A90E2"/>
+    <text class="switch-label">{{form.useHighway ? '走高速（省时）' : '不走高速（省钱）'}}</text>
+
+    <view class="btn-row mt32">
+      <button class="btn-back" bindtap="prevStep">← 返回</button>
+      <button class="btn-next flex1" bindtap="nextStep">下一步 →</button>
+    </view>
+  </view>
+
+  <!-- ───────────── Step 4: 天数 ───────────── -->
+  <view class="step-view" wx:if="{{step === 4}}">
+    <view class="step-emoji">📅</view>
+    <view class="step-title">玩几天？</view>
+    <view class="days-grid">
+      <view class="days-card {{form.days == item ? 'active' : ''}}"
+            wx:for="{{daysOptions}}" wx:key="*this" wx:for-item="item"
+            bindtap="selectDays" data-days="{{item}}">
+        <view class="days-num">{{item}}</view>
+        <view class="days-unit">天</view>
+      </view>
+    </view>
+    <view class="btn-row">
+      <button class="btn-back" bindtap="prevStep">← 返回</button>
+      <button class="btn-next flex1" bindtap="nextStep">下一步 →</button>
+    </view>
+  </view>
+
+  <!-- ───────────── Step 5: 出行人员 ───────────── -->
+  <view class="step-view" wx:if="{{step === 5}}">
+    <view class="step-emoji">👨‍👩‍👧</view>
+    <view class="step-title">一共几个人？</view>
+
+    <view class="people-card">
+      <view class="people-row">
+        <view class="people-info">
+          <view class="people-name">👨‍👩 大人</view>
+        </view>
+        <view class="counter">
+          <view class="counter-btn" bindtap="changePeople" data-type="adults" data-op="minus">−</view>
+          <text class="counter-num">{{form.adults}}</text>
+          <view class="counter-btn" bindtap="changePeople" data-type="adults" data-op="plus">+</view>
+        </view>
+      </view>
+      <view class="divider"></view>
+      <view class="people-row">
+        <view class="people-info">
+          <view class="people-name">👶 小孩</view>
+          <view class="people-sub">有小孩帮你优化行程节奏</view>
+        </view>
+        <view class="counter">
+          <view class="counter-btn" bindtap="changePeople" data-type="children" data-op="minus">−</view>
+          <text class="counter-num">{{form.children}}</text>
+          <view class="counter-btn" bindtap="changePeople" data-type="children" data-op="plus">+</view>
+        </view>
+      </view>
+    </view>
+
+    <view class="btn-row">
+      <button class="btn-back" bindtap="prevStep">← 返回</button>
+      <button class="btn-next flex1" bindtap="nextStep">下一步 →</button>
+    </view>
+  </view>
+
+  <!-- ───────────── Step 5b: 小孩年龄（有小孩才出现，实际step=5跳到这个内嵌块） -->
+  <!-- 注：小孩年龄作为step5的扩展，在nextStep里处理跳转 -->
+
+  <!-- ───────────── Step 6: 预算 ───────────── -->
+  <view class="step-view" wx:if="{{step === 6}}">
+    <view class="step-emoji">💰</view>
+    <view class="step-title">预算大概多少？</view>
+    <view class="step-sub">包含交通+住宿+餐饮+门票</view>
+
+    <!-- 小孩年龄（如果有小孩，在这里补充） -->
+    <block wx:if="{{form.children > 0}}">
+      <view class="section-label">小孩年龄段（可多选）</view>
+      <view class="age-tags">
+        <view class="age-tag {{form.childAges.indexOf(item.value) > -1 ? 'active' : ''}}"
+              wx:for="{{childAgeOptions}}" wx:key="value"
+              bindtap="toggleChildAge" data-age="{{item.value}}">
+          <text class="age-icon">{{item.icon}}</text>
+          <text class="age-label">{{item.label}}</text>
+          <text class="age-desc">{{item.desc}}</text>
+        </view>
+      </view>
+      <view class="section-label mt24">预算</view>
+    </block>
+
+    <view class="budget-cards">
+      <view class="budget-card {{form.budget == item.value ? 'active' : ''}}"
+            wx:for="{{budgetOptions}}" wx:key="value"
+            bindtap="selectBudget" data-value="{{item.value}}">{{item.label}}</view>
+    </view>
+
+    <view class="btn-row mt16">
+      <button class="btn-back" bindtap="prevStep">← 返回</button>
+    </view>
+  </view>
+
+  <!-- ───────────── Step 7: 旅行风格 ───────────── -->
+  <!-- 注意：step=7时totalSteps=7，选完直接进确认页 -->
+  <!-- 实际流程：预算选完(step6)自动到style选择，style选完进确认 -->
+  <!-- 这里step用独立值处理 -->
+
+  <!-- 旅行风格单独弹出（实际已在selectBudget后触发nextStep→step=7不存在→showConfirm前插入） -->
+  <!-- 简化：把风格选择放在step=6之后，在nextStep()里step从6→确认前先展示风格 -->
+  <!-- 重新设计：step6包含预算，step7为风格，totalSteps=8 -->
+
+  <!-- ───────────── Step 确认页 ───────────── -->
+  <view class="confirm-view" wx:if="{{step === 99}}">
+    <view class="confirm-title">确认你的行程信息</view>
+    <view class="confirm-card">
+      <view class="confirm-row">
+        <text class="ci-icon">✈️</text>
+        <text class="ci-text">{{confirmData.route}}</text>
+      </view>
+      <view class="confirm-row">
+        <text class="ci-icon">🚀</text>
+        <text class="ci-text">{{confirmData.transport}}</text>
+      </view>
+      <view class="confirm-row">
+        <text class="ci-icon">📅</text>
+        <text class="ci-text">{{confirmData.days}}</text>
+      </view>
+      <view class="confirm-row">
+        <text class="ci-icon">👨‍👩‍👧</text>
+        <text class="ci-text">{{confirmData.people}}</text>
+      </view>
+      <view class="confirm-row">
+        <text class="ci-icon">💰</text>
+        <text class="ci-text">{{confirmData.budget}}</text>
+      </view>
+      <view class="confirm-row">
+        <text class="ci-icon">🎯</text>
+        <text class="ci-text">{{confirmData.style}}</text>
+      </view>
+      <view class="confirm-row" wx:if="{{form.preference}}">
+        <text class="ci-icon">💬</text>
+        <text class="ci-text">{{confirmData.preference}}</text>
+      </view>
+    </view>
+
+    <!-- 特别偏好输入 -->
+    <view class="pref-section">
+      <view class="pref-label">还有什么特别想说的？（选填）</view>
+      <textarea class="pref-input" placeholder="例如：不想爬山、想住精品酒店、孩子怕水..."
+                value="{{form.preference}}" bindinput="onPreferenceInput" />
+    </view>
+
+    <view class="btn-row">
+      <button class="btn-back" bindtap="editForm">✏️ 修改</button>
+      <button class="btn-generate flex1" bindtap="generateItinerary">🤖 开始生成</button>
+    </view>
+  </view>
+
+</view>

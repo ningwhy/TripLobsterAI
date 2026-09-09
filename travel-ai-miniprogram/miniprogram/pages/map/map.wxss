@@ -1,0 +1,14 @@
+/* pages/map/map.wxss */
+.coming-soon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+  font-size: 32rpx;
+  color: #aaa;
+  gap: 20rpx;
+}
+.coming-soon text {
+  font-size: 100rpx;
+}

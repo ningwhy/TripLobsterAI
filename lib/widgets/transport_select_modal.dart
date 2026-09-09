@@ -532,7 +532,7 @@ class _TransportSelectModalState extends State<TransportSelectModal> with Single
     final transport = Transport(
       id: DateTime.now().millisecondsSinceEpoch.toString(),
       type: transportType,
-      category: TransportCategory.big,
+      scope: TransportScope.intercity,
       flightNumber: selectedLine.lineName,
       departureTime: selectedLine.departureTime,
       arrivalTime: selectedLine.arrivalTime,

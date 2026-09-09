@@ -1,17 +1,15 @@
 import 'package:uuid/uuid.dart';
 
 enum LocationType { home, hotel, attraction, restaurant, shopping, transport, other }
+// 六类语义映射：美食=restaurant 住宿=hotel 游玩=attraction 购物=shopping 枢纽=transport 其他=other；home=行程原点（不属于六类）
 
-enum TransportType { flight, highSpeedTrain, train, bus, taxi, subway, selfDrive, other }
+enum TransportType { flight, highSpeedTrain, train, bus, ship, taxi, subway, walk, selfDrive, other }
 
-enum TransportCategory {
-  big,       // 大交通（跨城）
-  small,     // 小交通（同城）
-  train,     // 火车/高铁
-  taxi,      // 打车
-  subway,    // 地铁
-  bus,       // 公交
-}
+/// 交通范围（与工具正交）：跨城线需枢纽点，同城线不需要
+enum TransportScope { intercity, intraCity }
+
+/// 行程类型（3类）：纯自驾 / 纯公共交通 / 公共交通+落地租车
+enum TripMode { pureDrive, pureTransit, transitPlusRental }
 
 enum MemberRole { admin, member }
 
@@ -23,6 +21,7 @@ class Trip {
   List<TripDay> days;
   HomeLocation? homeLocation;
   List<Member> members;
+  TripMode tripMode;
   DateTime createdAt;
   DateTime updatedAt;
 
@@ -34,6 +33,7 @@ class Trip {
     this.days = const [],
     this.homeLocation,
     this.members = const [],
+    this.tripMode = TripMode.pureTransit,
     DateTime? createdAt,
     DateTime? updatedAt,
   })  : id = id ?? const Uuid().v4(),
@@ -54,6 +54,7 @@ class Trip {
     'days': days.map((d) => d.toJson()).toList(),
     'homeLocation': homeLocation?.toJson(),
     'members': members.map((m) => m.toJson()).toList(),
+    'tripMode': tripMode.name,
     'createdAt': createdAt.toIso8601String(),
     'updatedAt': updatedAt.toIso8601String(),
   };
@@ -66,6 +67,7 @@ class Trip {
     days: (json['days'] as List).map((d) => TripDay.fromJson(d)).toList(),
     homeLocation: json['homeLocation'] != null ? HomeLocation.fromJson(json['homeLocation']) : null,
     members: (json['members'] as List).map((m) => Member.fromJson(m)).toList(),
+    tripMode: TripMode.values.firstWhere((e) => e.name == json['tripMode'], orElse: () => TripMode.pureTransit),
     createdAt: DateTime.parse(json['createdAt']),
     updatedAt: DateTime.parse(json['updatedAt']),
   );
@@ -123,6 +125,8 @@ class Location {
   String? city; // 城市名称（来自高德POI）
   String? district; // 区县名称（来自高德POI）
   LocationType type;
+  /// 枢纽子类型（仅 type==transport 时有意义）：station火车站/airport机场/bus汽车站/port港口/rental租车点
+  String? hubKind;
   int? stayMinutes;
   int? transportMinutes;
   String? openTime;
@@ -140,6 +144,7 @@ class Location {
     this.city,
     this.district,
     required this.type,
+    this.hubKind,
     this.stayMinutes,
     this.transportMinutes,
     this.openTime,
@@ -183,6 +188,7 @@ class Location {
     'city': city,
     'district': district,
     'type': type.name,
+    'hubKind': hubKind,
     'stayMinutes': stayMinutes,
     'transportMinutes': transportMinutes,
     'openTime': openTime,
@@ -201,6 +207,7 @@ class Location {
     city: json['city'],
     district: json['district'],
     type: LocationType.values.firstWhere((e) => e.name == json['type'], orElse: () => LocationType.other),
+    hubKind: json['hubKind'],
     stayMinutes: json['stayMinutes'],
     transportMinutes: json['transportMinutes'],
     openTime: json['openTime'],
@@ -214,7 +221,7 @@ class Location {
 class Transport {
   final String id;
   TransportType type;
-  TransportCategory category;
+  TransportScope scope;
   String? flightNumber;
   String? departureTime;
   String? arrivalTime;
@@ -224,7 +231,7 @@ class Transport {
   Transport({
     String? id,
     required this.type,
-    required this.category,
+    required this.scope,
     this.flightNumber,
     this.departureTime,
     this.arrivalTime,
@@ -232,7 +239,7 @@ class Transport {
     this.distance,
   }) : id = id ?? const Uuid().v4();
 
-  bool get isBigTransport => category == TransportCategory.big;
+  bool get isIntercity => scope == TransportScope.intercity;
 
   String get displayName {
     switch (type) {
@@ -244,10 +251,14 @@ class Transport {
         return '🚃 火车';
       case TransportType.bus:
         return '🚌 大巴';
+      case TransportType.ship:
+        return '⛴️ 轮船';
       case TransportType.taxi:
         return '🚕 打车';
       case TransportType.subway:
         return '🚇 地铁';
+      case TransportType.walk:
+        return '🚶 步行';
       case TransportType.selfDrive:
         return '🚗 自驾';
       default:
@@ -258,7 +269,7 @@ class Transport {
   Map<String, dynamic> toJson() => {
     'id': id,
     'type': type.name,
-    'category': category.name,
+    'scope': scope.name,
     'flightNumber': flightNumber,
     'departureTime': departureTime,
     'arrivalTime': arrivalTime,
@@ -268,8 +279,8 @@ class Transport {
 
   factory Transport.fromJson(Map<String, dynamic> json) => Transport(
     id: json['id'],
-    type: TransportType.values.firstWhere((e) => e.name == json['type']),
-    category: TransportCategory.values.firstWhere((e) => e.name == json['category']),
+    type: TransportType.values.firstWhere((e) => e.name == json['type'], orElse: () => TransportType.other),
+    scope: TransportScope.values.firstWhere((e) => e.name == json['scope'], orElse: () => TransportScope.intraCity),
     flightNumber: json['flightNumber'],
     departureTime: json['departureTime'],
     arrivalTime: json['arrivalTime'],
