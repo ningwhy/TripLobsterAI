@@ -411,7 +411,17 @@ function parseHm(s) {
   return toMin(String(s || ''));
 }
 
-async function buildIntercityPrefix(fromCity, toCity, warnings) {
+// 用户选定的跨城工具 → 枢纽关键词/速度/图标（类型由用户选择，禁止自动推断）
+const VEHICLE_CONF = {
+  flight: { hubKw: '机场', fallbackCode: '150100', hubKind: 'airport', speedKmh: 800, emoji: '✈️', label: '飞机', prep: 150 },
+  highSpeedTrain: { hubKw: '火车站', fallbackCode: '150200', hubKind: 'station', speedKmh: 300, emoji: '🚄', label: '高铁/火车', prep: 60 },
+  train: { hubKw: '火车站', fallbackCode: '150200', hubKind: 'station', speedKmh: 220, emoji: '🚃', label: '火车', prep: 60 },
+  bus: { hubKw: '汽车站', fallbackCode: '150400', hubKind: 'bus', speedKmh: 80, emoji: '🚌', label: '大巴', prep: 45 },
+  ship: { hubKw: '港口', fallbackCode: '150300', hubKind: 'port', speedKmh: 40, emoji: '⛴️', label: '轮船', prep: 60 },
+};
+
+async function buildIntercityPrefix(fromCity, toCity, vehicle, warnings) {
+  const conf = VEHICLE_CONF[vehicle] || VEHICLE_CONF.highSpeedTrain;
   const o = await geocodeCity(fromCity);
   const dest = await geocodeCity(toCity);
   if (!o || !dest) {
@@ -440,34 +450,33 @@ async function buildIntercityPrefix(fromCity, toCity, warnings) {
     depName: x.dep_airport || x.dep_station || '',
     arrName: x.arr_airport || x.arr_station || '',
   });
-  const flights = (data?.flight || []).map((f) => mapLine(f, 'flight')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null);
-  const trains = (data?.train || []).map((t) => mapLine(t, 'train')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null);
-  const preferFlight = distKm > 800;
+  // 只在用户选定的工具类型里选班次
+  const pool = vehicle === 'flight'
+    ? (data?.flight || []).map((f) => mapLine(f, 'flight')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null)
+    : (vehicle === 'bus'
+        ? (data?.bus || []).map((b) => mapLine(b, 'bus')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null)
+        : (data?.train || []).map((t) => mapLine(t, 'train')).filter((l) => parseHm(l.dep) != null && parseHm(l.arr) != null));
+  pool.sort((a, b) => parseHm(a.dep) - parseHm(b.dep));
 
   let line;
-  if (flights.length || trains.length) {
-    let pool = preferFlight ? (flights.length ? flights : trains) : (trains.length ? trains : flights);
-    pool.sort((a, b) => parseHm(a.dep) - parseHm(b.dep));
-    // 优先早上 7:30-11:30 出发的班次（到达后还能玩半天）
+  if (pool.length) {
+    // 班次建议：优先早上出发（到达后还能玩半天）
     const morning = pool.filter((l) => {
       const m = parseHm(l.dep);
       return m >= 450 && m <= 690;
     });
     line = morning[0] || pool[0];
   } else {
-    // 高德跨城班次接口需企业认证（10002）：按距离估算建议时段，班次号待用户预订时填
-    const flightMin = Math.round((distKm / 800) * 60 + 90);
-    const trainMin = Math.round((distKm / 300) * 60);
-    const useFlight = preferFlight || trainMin > 480;
-    line = useFlight
-      ? { kind: 'flight', no: '', dep: '08:30', arr: fmt(510 + flightMin), dur: flightMin, price: null, depName: '', arrName: '' }
-      : { kind: 'train', no: '', dep: '08:00', arr: fmt(480 + trainMin), dur: trainMin, price: null, depName: '', arrName: '' };
-    warnings.push('跨城班次实时查询需要高德企业认证，已按典型时长生成建议时段，预订时选早班（到达后还能玩半天）');
+    // 高德跨城班次接口需企业认证（10002）：按用户选定工具的典型速度估算时段，班次号待用户预订时填
+    const dur = Math.round((distKm / conf.speedKmh) * 60 + conf.prep);
+    const dep = vehicle === 'flight' ? 510 : 480;
+    line = { kind: vehicle, no: '', dep: fmt(dep), arr: fmt(dep + dur), dur, price: null, depName: '', arrName: '' };
+    warnings.push('跨城班次实时查询需要高德企业认证，已按你选的交通工具和典型时长生成建议时段，预订时选早班（到达后还能玩半天）');
   }
   const depMin = parseHm(line.dep);
   const arrMin = parseHm(line.arr);
-  const hubKw = line.kind === 'flight' ? '机场' : '火车站';
-  const fallbackCode = line.kind === 'flight' ? '150100' : '150200';
+  const hubKw = conf.hubKw;
+  const fallbackCode = conf.fallbackCode;
 
   const mkHub = async (cityName, ref) => {
     const pois = await queryPois(cityName, { keywords: hubKw }, 1);
@@ -485,19 +494,20 @@ async function buildIntercityPrefix(fromCity, toCity, warnings) {
   const depPoi = await mkHub(fromCity, o);
   const arrPoi = await mkHub(toCity, dest);
 
-  // 出发枢纽：提前3小时离家，含值机/候车150分钟
-  const depHub = toLocation(depPoi, depMin - 180, 150, null, {});
+  // 出发枢纽：提前到达（飞机提前150分钟/火车60/大巴45），停留即候车，离开=发车
+  const hubArr = depMin - conf.prep;
+  const depHub = toLocation(depPoi, hubArr, conf.prep, null, {});
   depHub.transport = {
     type: 'taxi',
     scope: 'intraCity',
     durationMinutes: 90,
-    departureTime: fmt(depMin - 270),
-    arrivalTime: fmt(depMin - 180),
+    departureTime: fmt(hubArr - 90),
+    arrivalTime: fmt(hubArr),
   };
   // 到达枢纽：下机/出站45分钟
   const arrHub = toLocation(arrPoi, arrMin, 45, null, {});
   arrHub.transport = {
-    type: line.kind === 'flight' ? 'flight' : 'highSpeedTrain',
+    type: vehicle,
     scope: 'intercity',
     flightNumber: line.no || null,
     departureTime: line.dep,
@@ -506,7 +516,7 @@ async function buildIntercityPrefix(fromCity, toCity, warnings) {
     price: line.price,
   };
   warnings.push(
-    `跨城交通建议：${line.kind === 'flight' ? '✈️' : '🚄'} ${line.no ? line.no + ' ' : ''}${fromCity} ${line.dep} → ${toCity} ${line.arr}${line.price ? `（约¥${line.price}）` : ''}，第1天行程从到达后开始`
+    `跨城交通建议：${conf.emoji} ${line.no ? line.no + ' ' : ''}${fromCity} ${line.dep} → ${toCity} ${line.arr}${line.price ? `（约¥${line.price}）` : ''}，第1天行程从到达后开始`
   );
   return { depHub, arrHub, depMin, arrMin };
 }
@@ -775,11 +785,14 @@ export async function generateTrip(input) {
   const budget = ['economy', 'comfort', 'luxury'].includes(input.budget) ? input.budget : 'comfort';
   const driveMode = tripMode === 'pureDrive' || tripMode === 'transitPlusRental';
 
-  // 跨城交通：班次建议 + 真实枢纽（决策#3）
+  // 跨城交通：用户选定工具类型，AI 只建议班次（决策#3修正：类型禁止自动推断）
   const fromCity = String(input.fromCity || '').trim();
+  const intercityVehicle = ['flight', 'highSpeedTrain', 'train', 'bus', 'ship'].includes(input.intercityVehicle)
+    ? input.intercityVehicle
+    : 'highSpeedTrain';
   let prefix = null;
   if (fromCity && fromCity.replace(/(市|地区|自治州)$/, '') !== city.replace(/(市|地区|自治州)$/, '')) {
-    prefix = await buildIntercityPrefix(fromCity, city, warnings);
+    prefix = await buildIntercityPrefix(fromCity, city, intercityVehicle, warnings);
   }
 
   // 落地租车：第1天首位插入取车点（枢纽子类型 rental，决策#2）

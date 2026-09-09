@@ -111,13 +111,13 @@ console.log('...planner generating (3天 乌鲁木齐 from 北京)...');
 t0 = Date.now();
 const xPlan = await j('POST', '/api/planner/generate', {
   city: '乌鲁木齐', days: 3, startDate: '2026-10-01', pace: 'normal',
-  interests: ['nature'], tripMode: 'pureTransit', fromCity: '北京',
+  interests: ['nature'], tripMode: 'pureTransit', fromCity: '北京', intercityVehicle: 'flight',
   adults: 2, children: 1, rooms: 1, roomType: 'family', budget: 'comfort',
 });
 console.log(`intercity planner took ${((Date.now() - t0) / 1000).toFixed(1)}s`);
 const d1 = xPlan.trip?.days?.[0]?.locations || [];
 check('跨城枢纽已插入', d1.length >= 3 && d1[0]?.type === 'transport' && d1[1]?.type === 'transport', `${d1[0]?.name} → ${d1[1]?.name}`);
-check('跨城班次已挂载', d1[1]?.transport?.scope === 'intercity' && !!d1[1]?.transport?.type && !!d1[1]?.transport?.departureTime, `${d1[1]?.transport?.type || '-'} ${d1[1]?.transport?.flightNumber || '班次待订'} ${d1[1]?.transport?.departureTime || '-'}→${d1[1]?.transport?.arrivalTime || '-'}`);
+check('跨城班次已挂载', d1[1]?.transport?.scope === 'intercity' && d1[1]?.transport?.type === 'flight' && !!d1[1]?.transport?.departureTime, `用户选了飞机→${d1[1]?.transport?.type} ${d1[1]?.transport?.flightNumber || '班次待订'} ${d1[1]?.transport?.departureTime || '-'}→${d1[1]?.transport?.arrivalTime || '-'}`);
 const hotels = (xPlan.trip?.days || []).flatMap((d) => d.locations).filter((l) => l.type === 'hotel');
 check('每晚酒店已插入', hotels.length >= 1 && hotels.length <= 2, `hotels=${hotels.length} first=${hotels[0]?.name || '-'}@${hotels[0]?.arrivalTime || '-'}`);
 const d2 = xPlan.trip?.days?.[1]?.locations || [];

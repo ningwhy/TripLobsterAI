@@ -41,6 +41,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
   Map<String, dynamic>? _result;
   String? _error;
   TripMode _tripMode = TripMode.pureTransit;
+  String _intercityVehicle = 'highSpeedTrain';
   int _adults = 2;
   int _children = 0;
   int _rooms = 1;
@@ -83,6 +84,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
         pace: _pace,
         interests: _selectedInterests.toList(),
         tripMode: _tripMode.name,
+        intercityVehicle: _intercityVehicle,
         description: _descController.text.trim(),
         fromCity: provider.homeLocation?.city,
         adults: _adults,
@@ -285,6 +287,22 @@ class _AiPlanPageState extends State<AiPlanPage> {
           selected: {_tripMode},
           onSelectionChanged: (s) => setState(() => _tripMode = s.first),
         ),
+        if (_tripMode != TripMode.pureDrive) ...[
+          const SizedBox(height: 14),
+          const Text('跨城交通（你选工具，AI 只建议班次）', style: TextStyle(fontSize: 13, color: AppColors.textSub)),
+          const SizedBox(height: 6),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(value: 'flight', label: Text('✈️ 飞机')),
+              ButtonSegment(value: 'highSpeedTrain', label: Text('🚄 高铁')),
+              ButtonSegment(value: 'bus', label: Text('🚌 大巴')),
+              ButtonSegment(value: 'ship', label: Text('⛴️ 轮船')),
+            ],
+            selected: {_intercityVehicle},
+            onSelectionChanged: (s) => setState(() => _intercityVehicle = s.first),
+            showSelectedIcon: false,
+          ),
+        ],
         const SizedBox(height: 20),
         const Text('兴趣偏好', style: TextStyle(fontWeight: FontWeight.bold)),
         const SizedBox(height: 8),
