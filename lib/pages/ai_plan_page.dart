@@ -151,6 +151,9 @@ class _AiPlanPageState extends State<AiPlanPage> {
             transportMinutes: loc['transportMinutes'],
             openTime: loc['openTime'],
             closeTime: loc['closeTime'],
+            hotelCandidates: (loc['hotelCandidates'] as List?)
+                ?.map((e) => Map<String, dynamic>.from(e as Map))
+                .toList(),
           );
         }).toList(),
       );

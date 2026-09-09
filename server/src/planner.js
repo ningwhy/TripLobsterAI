@@ -168,6 +168,7 @@ function normalizePoi(p) {
     rating: ratingOf(p),
     openTime: open,
     closeTime: close,
+    typeText: typeof p.type === 'string' ? p.type : '',
   };
 }
 
@@ -534,39 +535,84 @@ function parseCost(cost) {
   return { low: parseInt(m[1], 10), high: m[2] ? parseInt(m[2], 10) : parseInt(m[1], 10) };
 }
 
-async function findHotel(near, budgetKey) {
+// 星级从高德 POI 类型文本提取（“住宿服务;五星级宾馆;…”）
+function starFromType(t = '') {
+  if (/五星级|豪华型/.test(t)) return 5;
+  if (/四星级|高档型/.test(t)) return 4;
+  if (/三星级|舒适型/.test(t)) return 3;
+  if (/经济型|连锁/.test(t)) return 2;
+  return null;
+}
+
+const BUDGET_STARS = { economy: [2, 3], comfort: [3, 4], luxury: [4, 5] };
+
+// 多目标酒店评分：位置(当晚余下+次日上午的加权重心) + 口碑 + 星级档 + 亲子加分
+// 返回前3候选（含推荐理由），装修年份/房型库存高德无数据→靠候选对比+预订时核实
+async function findHotels(anchors, budgetKey, party) {
   try {
+    let W = 0, lng = 0, lat = 0;
+    for (const a of anchors) {
+      W += a.w;
+      lng += a.poi.lng * a.w;
+      lat += a.poi.lat * a.w;
+    }
+    const c = { lng: lng / W, lat: lat / W };
     const data = await amapCall('/v3/place/around', {
-      location: `${near.lng},${near.lat}`,
+      location: `${c.lng.toFixed(6)},${c.lat.toFixed(6)}`,
       types: '100000',
-      radius: '8000',
-      offset: '20',
+      radius: '10000',
+      offset: '25',
       page: '1',
       extensions: 'all',
       sortrule: 'weight',
     });
-    let hotels = (data?.pois || [])
+    const hotels = (data?.pois || [])
       .map((p) => {
         const n = normalizePoi(p);
         return n ? { ...n, cost: p.biz_ext?.cost } : null;
       })
       .filter(Boolean);
-    if (!hotels.length) return null;
+    if (!hotels.length) return [];
+
+    // 价格档宽松过滤：档内优先，无档内则任何有价格的，再不行全部
     const range = BUDGET_RANGE[budgetKey];
-    if (range) {
-      const filtered = hotels.filter((h) => {
-        const c = parseCost(h.cost);
-        if (!c) return false;
-        if (range.max != null && c.low > range.max) return false;
-        if (range.min != null && c.high < range.min) return false;
-        return true;
-      });
-      if (filtered.length) hotels = filtered;
-    }
-    hotels.sort((a, b) => (b.rating || 3.5) - (a.rating || 3.5));
-    return hotels[0];
+    let pool = hotels.filter((h) => {
+      const cst = parseCost(h.cost);
+      if (!cst) return false;
+      if (range.max != null && cst.low > range.max) return false;
+      if (range.min != null && cst.high < range.min) return false;
+      return true;
+    });
+    if (!pool.length) pool = hotels.filter((h) => parseCost(h.cost));
+    if (!pool.length) pool = hotels;
+
+    // 位置分：到锚点集合的加权距离（越小越好，min-max 归一）
+    const weightedDist = (h) => anchors.reduce((s, a) => s + a.w * haversineKm(h, a.poi), 0);
+    const dists = pool.map(weightedDist);
+    const minD = Math.min(...dists), maxD = Math.max(...dists);
+    const normPos = (v) => (maxD > minD ? 1 - (v - minD) / (maxD - minD) : 1);
+
+    const targetStars = BUDGET_STARS[budgetKey] || [3, 4];
+    const scored = pool.map((h) => {
+      const posScore = normPos(weightedDist(h));
+      const ratingScore = Math.min(1, (h.rating || 3.5) / 5);
+      const star = starFromType(h.typeText || '');
+      const starScore = star == null ? 0.4 : targetStars.includes(star) ? 1 : Math.min(Math.abs(star - targetStars[0]), Math.abs(star - targetStars[1])) === 1 ? 0.6 : 0.2;
+      const familyBonus = party.children > 0 && /亲子|家庭|套房|公寓/.test(h.name) ? 0.12 : 0;
+      const total = 0.45 * posScore + 0.3 * ratingScore + 0.15 * starScore + familyBonus;
+
+      const nearest = Math.min(...anchors.map((a) => haversineKm(h, a.poi)));
+      const bits = [`位置${posScore >= 0.66 ? '优' : posScore >= 0.33 ? '良' : '一般'}·距行程点${nearest.toFixed(1)}km`];
+      if (h.rating) bits.push(`口碑${h.rating}`);
+      if (h.cost) bits.push(`¥${h.cost}`);
+      if (star) bits.push(star === 5 ? '五星' : star === 4 ? '四星' : star === 3 ? '三星' : '经济连锁');
+      if (familyBonus) bits.push('或有亲子房型');
+      return { poi: h, score: total, reason: bits.join('·') };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored.slice(0, 3);
   } catch {
-    return null;
+    return [];
   }
 }
 
@@ -824,22 +870,37 @@ export async function generateTrip(input) {
     );
     const day = dayResults[dayResults.length - 1];
 
-    // 每晚酒店：当天最后一站附近选，评分+价格档过滤，次日从酒店出发（决策#4）
+    // 每晚酒店：多目标评分（当晚余下+次日上午的加权重心），给三个候选可切换（决策#4升级）
     if (!isLastDay) {
       const dayPts = (groups[i] || []).filter((p) => p.lat && p.lng);
-      const anchor = dayPts.length ? dayPts[dayPts.length - 1] : prevHotel;
-      if (anchor) {
-        const hotel = await findHotel(anchor, budget);
-        if (hotel) {
+      const nextPts = ((groups[i + 1] || []).filter((p) => p.lat && p.lng)).slice(0, 2);
+      const travelOrigin = dayPts.length ? dayPts[dayPts.length - 1] : prevHotel;
+      const anchors = [];
+      if (travelOrigin) anchors.push({ poi: travelOrigin, w: nextPts.length ? 0.35 : 1 });
+      for (const np of nextPts) anchors.push({ poi: np, w: 0.6 });
+      if (anchors.length) {
+        const cands = await findHotels(anchors, budget, party);
+        if (cands.length) {
+          const best = cands[0];
           const lastLoc = day.locations[day.locations.length - 1];
           const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (startClock ?? START_CLOCK[pace]);
-          const travel = await segmentMinutes(anchor, hotel, city, driveMode ? 'drive' : 'transit');
+          const travel = await segmentMinutes(travelOrigin, best.poi, city, driveMode ? 'drive' : 'transit');
           const arrival = base + (travel ? travel.minutes : 15);
-          day.locations.push(toLocation({ ...hotel, typecode: '100100' }, arrival, 600, travel, {}));
-          prevHotel = hotel;
+          const hotelLoc = toLocation({ ...best.poi, typecode: '100100' }, arrival, 600, travel, {});
+          hotelLoc.hotelCandidates = cands.map((cd) => ({
+            name: cd.poi.name,
+            address: cd.poi.address,
+            latitude: cd.poi.lat,
+            longitude: cd.poi.lng,
+            rating: cd.poi.rating || null,
+            cost: cd.poi.cost || null,
+            reason: cd.reason,
+          }));
+          day.locations.push(hotelLoc);
+          prevHotel = best.poi;
           const partyNote = party.children > 0 ? `${party.adults}大${party.children}小` : `${party.adults}人`;
           const roomNote = party.roomType ? `·${ROOM_TYPE_LABEL[party.roomType]}` : '';
-          warnings.push(`第${i + 1}晚住宿：${hotel.name}（${partyNote}·${party.rooms}间${roomNote}·${BUDGET_LABEL[budget]}档）`);
+          warnings.push(`第${i + 1}晚住宿：${best.poi.name}（${best.reason}｜${partyNote}·${party.rooms}间${roomNote}，房型库存请预订时确认）${cands.length > 1 ? `，另有${cands.length - 1}个候选可在行程中切换` : ''}`);
         } else {
           warnings.push(`第${i + 1}晚未找到合适酒店，请自行预订`);
         }

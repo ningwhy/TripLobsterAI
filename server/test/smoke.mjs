@@ -120,6 +120,7 @@ check('跨城枢纽已插入', d1.length >= 3 && d1[0]?.type === 'transport' && 
 check('跨城班次已挂载', d1[1]?.transport?.scope === 'intercity' && d1[1]?.transport?.type === 'flight' && !!d1[1]?.transport?.departureTime, `用户选了飞机→${d1[1]?.transport?.type} ${d1[1]?.transport?.flightNumber || '班次待订'} ${d1[1]?.transport?.departureTime || '-'}→${d1[1]?.transport?.arrivalTime || '-'}`);
 const hotels = (xPlan.trip?.days || []).flatMap((d) => d.locations).filter((l) => l.type === 'hotel');
 check('每晚酒店已插入', hotels.length >= 1 && hotels.length <= 2, `hotels=${hotels.length} first=${hotels[0]?.name || '-'}@${hotels[0]?.arrivalTime || '-'}`);
+check('酒店三候选可切换', (hotels[0]?.hotelCandidates?.length ?? 0) >= 1 && !!hotels[0]?.hotelCandidates?.[0]?.reason, `候选数=${hotels[0]?.hotelCandidates?.length} 理由=${hotels[0]?.hotelCandidates?.[0]?.reason || '-'}`);
 const d2 = xPlan.trip?.days?.[1]?.locations || [];
 check('第2天从酒店出发', d2.length === 0 || d2[0]?.transportMinutes != null, `d2首站:${d2[0]?.name || '-'} 行程${d2[0]?.transportMinutes ?? '-'}分`);
 check('人数房型已回传', xPlan.trip?.adults === 2 && xPlan.trip?.children === 1 && xPlan.trip?.roomType === 'family');

@@ -613,6 +613,8 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
   }
 
   void _showLocationSheet(Location loc) {
+    final isHotel = loc.type == LocationType.hotel;
+    final cands = (loc.hotelCandidates ?? []).where((c) => c['name'] != loc.name).toList();
     showModalBottomSheet(
       context: context,
       shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
@@ -624,6 +626,26 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
               child: Text(loc.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
             ),
+            if (isHotel && cands.isNotEmpty) ...[
+              const Padding(
+                padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
+                child: Align(
+                  alignment: Alignment.centerLeft,
+                  child: Text('换一家（AI 已按位置/口碑/星级/预算筛过）', style: TextStyle(fontSize: 12, color: AppColors.textSub)),
+                ),
+              ),
+              ...cands.map((c) => ListTile(
+                    dense: true,
+                    leading: const Icon(Icons.hotel_rounded, size: 20, color: AppColors.greenDark),
+                    title: Text(c['name']?.toString() ?? '', style: const TextStyle(fontSize: 14)),
+                    subtitle: Text(c['reason']?.toString() ?? '', style: const TextStyle(fontSize: 11, color: AppColors.textSub)),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      _switchHotel(loc, c);
+                    },
+                  )),
+              const Divider(height: 1, indent: 20, endIndent: 20),
+            ],
             ListTile(
               leading: const Icon(Icons.timelapse_outlined, color: AppColors.greenDark),
               title: const Text('调整停留时长'),
@@ -644,6 +666,19 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           ],
         ),
       ),
+    );
+  }
+
+  Future<void> _switchHotel(Location loc, Map<String, dynamic> cand) async {
+    loc.name = cand['name']?.toString() ?? loc.name;
+    loc.address = cand['address']?.toString() ?? loc.address;
+    loc.latitude = (cand['latitude'] as num?)?.toDouble() ?? loc.latitude;
+    loc.longitude = (cand['longitude'] as num?)?.toDouble() ?? loc.longitude;
+    await context.read<TripProvider>().updateTrip(widget.trip);
+    if (!mounted) return;
+    setState(() {});
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已切换酒店，次日出发交通时长可重新编辑校准')),
     );
   }
 

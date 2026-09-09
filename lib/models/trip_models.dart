@@ -173,6 +173,8 @@ class Location {
   bool isAutoAdded; // 系统自动添加的交通枢纽
   Transport? transport; // 到达此地点的交通
   List<String> photoIds;
+  /// 酒店三候选（仅 type==hotel 时有值）：name/address/latitude/longitude/rating/cost/reason
+  List<Map<String, dynamic>>? hotelCandidates;
 
   Location({
     String? id,
@@ -191,6 +193,7 @@ class Location {
     this.isAutoAdded = false,
     this.transport,
     this.photoIds = const [],
+    this.hotelCandidates,
   }) : id = id ?? const Uuid().v4();
 
   /// 获取城市名称，优先使用POI返回的city，否则从address解析
@@ -235,6 +238,7 @@ class Location {
     'isAutoAdded': isAutoAdded,
     'transport': transport?.toJson(),
     'photoIds': photoIds,
+    'hotelCandidates': hotelCandidates,
   };
 
   factory Location.fromJson(Map<String, dynamic> json) => Location(
@@ -254,6 +258,9 @@ class Location {
     isAutoAdded: json['isAutoAdded'] ?? false,
     transport: json['transport'] != null ? Transport.fromJson(json['transport']) : null,
     photoIds: List<String>.from(json['photoIds'] ?? []),
+    hotelCandidates: (json['hotelCandidates'] as List?)
+        ?.map((e) => Map<String, dynamic>.from(e as Map))
+        .toList(),
   );
 }
 
