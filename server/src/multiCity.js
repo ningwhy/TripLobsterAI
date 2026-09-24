@@ -8,6 +8,7 @@
 // 铁律不变：AI 只做编排，所有地点/路线/时间来自高德真实数据；建议不决策，可回退。
 import { amapCall } from './amapProxy.js';
 import { isLlmEnabled, llmChat } from './llm.js';
+import { makeCache } from './util.js';
 import {
   gatherCandidates, geocodeCity, haversineKm, clusterByDay, buildDay,
   findHotels, segmentMinutes, findRestStop, toLocation, fmt, toMin, addDays,
@@ -99,13 +100,13 @@ export function allocateCityDays(totalDays, cityCount, legHours = [], weights = 
 }
 
 // ---------- S1/S2 城市推荐（LLM，失败必须显式报错而不是编数据） ----------
-async function llmSuggestCities({ origin, days, tripMode, interestLabels, desc }) {
+async function llmSuggestCities({ origin, days, tripMode, interestLabels, desc, party = null, budget = null }) {
   const modeText = { pureDrive: '自驾（每日驾驶建议不超过6小时）', pureTransit: '公共交通', transitPlusRental: '公共交通+落地租车' }[tripMode] || tripMode;
   try {
     const content = await llmChat(
       [
-        { role: 'system', content: '你是资深旅行规划师。根据出发地、总天数、出行方式和偏好，推荐真实存在、适合该行程的中途停留或深度游玩城市（不要推荐出发地本身）。输出JSON：{"cities":[{"name":"城市名","stayDays":2,"reason":"一句话理由"}]}。城市数2-6个，各城stayDays之和加上路途时间约等于总天数。' },
-        { role: 'user', content: JSON.stringify({ origin, days, mode: modeText, interests: interestLabels, 用户描述: desc || '无' }) },
+        { role: 'system', content: '你是资深旅行规划师。根据出发地、总天数、出行方式、同行人员和偏好，推荐真实存在、适合该行程的中途停留或深度游玩城市（不要推荐出发地本身）。同行有老人小孩时优先亲子友好、车程友好的城市，避免高海拔/高强度目的地。输出JSON：{"cities":[{"name":"城市名","stayDays":2,"reason":"一句话理由"}]}。城市数2-6个，各城stayDays之和加上路途时间约等于总天数。' },
+        { role: 'user', content: JSON.stringify({ origin, days, mode: modeText, interests: interestLabels, 出行人员: party, 预算档: budget, 用户描述: desc || '无' }) },
       ],
       { jsonMode: true, timeoutMs: 45000 }
     );
@@ -162,6 +163,7 @@ export async function planCorridor(input) {
   const roundTrip = input.roundTrip !== false;
   const vehicle = ['flight', 'highSpeedTrain', 'train', 'bus', 'ship'].includes(input.intercityVehicle) ? input.intercityVehicle : 'highSpeedTrain';
   const warnings = [];
+  const suggestions = []; // 被收紧/裁剪的 POI（可手动加回 —— 铁律：默认可撤销）
 
   const hints = extractHints(String(input.description || '').trim());
   let pace = ['relaxed', 'normal', 'packed'].includes(input.pace) ? input.pace : 'normal';
@@ -198,7 +200,7 @@ export async function planCorridor(input) {
       const e = new Error('请提供想去的城市列表 cities（如 ["天津","潍坊","威海"]），或在服务端配置 LLM 后由 AI 按攻略自动推荐');
       e.status = 400; e.expose = true; throw e;
     }
-    const suggested = await llmSuggestCities({ origin: originName, days, tripMode, interestLabels: interestKeys.map((k) => INTERESTS[k].label), desc: String(input.description || '').trim() });
+    const suggested = await llmSuggestCities({ origin: originName, days, tripMode, interestLabels: interestKeys.map((k) => INTERESTS[k].label), desc: String(input.description || '').trim(), party, budget: budgetKey });
     if (!suggested) {
       const e = new Error('AI 城市推荐失败（LLM 无响应或输出异常），请显式传入 cities 重试');
       e.status = 502; e.expose = true; throw e;
@@ -264,6 +266,7 @@ export async function planCorridor(input) {
   // S4+S5：逐城 → 逐天构建
   const tripDays = [];
   let prevPoint = { ...originGeo, name: originName, city: originName }; // 上一夜落点（酒店/末站/出发地）
+  let prevHotel = null; // 连住支持：记住上一晚酒店
   let dayIdx = 0;
 
   for (let ci = 0; ci < order.length; ci++) {
@@ -277,20 +280,59 @@ export async function planCorridor(input) {
     if (!candidates.length) warnings.push(`「${city.name}」未搜到候选景点，该城只安排食宿与赶路`);
     candidates.sort((a, b) => (b.rating || 0) - (a.rating || 0));
     const mustIds = new Set(mustPois.filter((m) => m.cityIdx === ci).map((m) => m.poi.id));
-    const selected = candidates.slice(0, need);
+    // 必去点保证入选：先拼必去再补评分候选（否则低分/无评分的必去会被 slice 截掉 —— 用户显式需求 > 算法）
+    const cityMusts = mustPois.filter((m) => m.cityIdx === ci).map((m) => m.poi);
+    const selected = [...cityMusts, ...candidates.filter((c) => !mustIds.has(c.id))].slice(0, need);
     const groups = clusterByDay(selected, nDays, cap);
 
     const arriveLeg = legToCity[ci];
+    // 收紧当天景点量：必去点永不裁剪，其余进 suggestions（可手动加回）
+    const tightenDay = (arr, capN) => {
+      const must = arr.filter((p) => p._must);
+      const rest = arr.filter((p) => !p._must);
+      const kept = [...must, ...rest].slice(0, Math.max(capN, must.length));
+      for (const p of arr) {
+        if (!kept.includes(p)) suggestions.push({ name: p.name, city: city.name, reason: `因赶路/返程时间收紧，未排入第${dayIdx + 1}天，可手动加回` });
+      }
+      return kept;
+    };
     for (let d = 0; d < nDays; d++) {
+      const isTripLastDay = ci === order.length - 1 && d === nDays - 1;
       let pts = groups[d].map((p) => ({ ...p, _must: mustIds.has(p.id) }));
       let startClock = null;
       let origin = prevPoint;
 
-      // 赶路日收紧当天景点量：>6h 只留1站，3-6h 留2站
+      // 赶路日收紧当天景点量 + 长驾驶日早出发（旅行实务：>4h 车程 8:00 出发）
       if (d === 0 && arriveLeg) {
         const h = arriveLeg.minutes / 60;
-        if (h > 6) pts = pts.slice(0, 1);
-        else if (h > 3) pts = pts.slice(0, 2);
+        if (h > 6) {
+          pts = tightenDay(pts, 1);
+          startClock = 480;
+          warnings.push(`第${dayIdx + 1}天赶路 ${arriveLeg.km}km（约${h.toFixed(1)}小时），已按 8:00 早出发，当天只保留 1 个景点`);
+        } else if (h > 4) {
+          pts = tightenDay(pts, 2);
+          startClock = 480;
+          warnings.push(`第${dayIdx + 1}天赶路 ${arriveLeg.km}km（约${h.toFixed(1)}小时），已按 8:00 早出发`);
+        } else if (h > 3) {
+          pts = tightenDay(pts, 2);
+        }
+        if (arriveLeg.km > 600) {
+          warnings.push(`单日 ${arriveLeg.km}km 超过家庭自驾安全线（约600km/天），强烈建议在中途城市加一晚过夜（可在 cities 中加入中点城市重新规划）`);
+        }
+      }
+
+      // 返程日：给回家路上预留时间（反向收紧，避免最后一天排满+开夜路）
+      if (isTripLastDay && returnLeg) {
+        const rh = returnLeg.minutes / 60;
+        if (rh > 7) {
+          suggestions.push(...pts.map((p) => ({ name: p.name, city: city.name, reason: `返程需 ${rh.toFixed(1)} 小时建议全天赶路，未排入最后一天` })));
+          pts = [];
+          warnings.push(`最后一天全程返程（${returnLeg.km}km / ${rh.toFixed(1)}h），未安排景点；若想再玩半天，请增加总天数或压缩前面城市`);
+        } else if (rh > 4) {
+          pts = tightenDay(pts, 1);
+          startClock = 480;
+          warnings.push(`最后一天需预留返程 ${returnLeg.km}km / ${rh.toFixed(1)}h，只保留 1 个景点并 8:00 早出发`);
+        }
       }
 
       // 自驾长腿（>250km）：先插入高速服务区休息点（走廊式长线刚需）
@@ -345,15 +387,40 @@ export async function planCorridor(input) {
       }
 
       // 每晚酒店（全程最后一天不排：返程到家/或由用户加）
-      const isTripLastDay = ci === order.length - 1 && d === nDays - 1;
       let lastLoc = day.locations[day.locations.length - 1];
-      if (!isTripLastDay && lastLoc) {
-        const anchors = [{ poi: { lng: lastLoc.longitude, lat: lastLoc.latitude }, w: 1 }];
+      if (!isTripLastDay) {
+        if (!lastLoc) warnings.push(`第${dayIdx + 1}天「${city.name}」无候选景点，仅安排住宿休整`);
+        const anchorPoi = lastLoc && Number.isFinite(lastLoc.longitude) ? { lng: lastLoc.longitude, lat: lastLoc.latitude } : { lng: city.lng, lat: city.lat };
+        // 选址兼顾两头：今晚末站(0.7) + 次日首站/下一城方向(0.6/0.4) —— 避免酒店扎堆在今晚景点旁、明早绕远路
+        const anchors = [{ poi: anchorPoi, w: lastLoc ? 0.7 : 1 }];
+        const nextPts = (groups[d + 1] || []).filter((p) => p.lat && p.lng).slice(0, 2);
+        for (const np of nextPts) anchors.push({ poi: np, w: 0.6 });
+        if (!nextPts.length && ci + 1 < order.length) anchors.push({ poi: { lng: order[ci + 1].lng, lat: order[ci + 1].lat }, w: 0.4 });
         const cands = await findHotels(anchors, budgetKey, party);
-        if (cands.length) {
+        const cityKey = city.name.replace(/(市|地区|自治州)$/, '');
+        const sameCityStay = prevHotel && String(prevHotel.city || '').replace(/(市|地区|自治州)$/, '') === cityKey;
+        if (sameCityStay) {
+          // 连住默认（免每天打包搬行李，旅行者真实习惯）；更优者列为"可换"候选 —— 建议不决策
+          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (startClock ?? START_CLOCK[pace]);
+          const travel = lastLoc && Number.isFinite(lastLoc.longitude)
+            ? await segmentMinutes({ lng: lastLoc.longitude, lat: lastLoc.latitude, city: city.name }, prevHotel, city.name, driveMode ? 'drive' : 'transit')
+            : null;
+          const arrival = base + (travel ? travel.minutes : 15);
+          const hotelLoc = toLocation({ ...prevHotel, typecode: '100100' }, arrival, 600, travel, {});
+          hotelLoc.stayNote = '连住';
+          const alts = cands.filter((cd) => cd.poi.name !== prevHotel.name).slice(0, 3);
+          if (alts.length) {
+            hotelLoc.hotelCandidates = alts.map((cd) => ({
+              name: cd.poi.name, address: cd.poi.address, latitude: cd.poi.lat, longitude: cd.poi.lng,
+              rating: cd.poi.rating || null, cost: cd.poi.cost || null, reason: `${cd.reason}（若想换住）`,
+            }));
+          }
+          day.locations.push(hotelLoc);
+          lastLoc = hotelLoc;
+        } else if (cands.length) {
           const best = cands[0];
-          const base = toMin(lastLoc.leaveTime) || (startClock ?? START_CLOCK[pace]);
-          const travel = Number.isFinite(lastLoc.longitude)
+          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (startClock ?? START_CLOCK[pace]);
+          const travel = lastLoc && Number.isFinite(lastLoc.longitude)
             ? await segmentMinutes({ lng: lastLoc.longitude, lat: lastLoc.latitude, city: city.name }, best.poi, city.name, driveMode ? 'drive' : 'transit')
             : null;
           const arrival = base + (travel ? travel.minutes : 15);
@@ -364,12 +431,18 @@ export async function planCorridor(input) {
           }));
           day.locations.push(hotelLoc);
           lastLoc = hotelLoc;
-          warnings.push(`第${dayIdx + 1}晚住「${best.poi.name}」（${best.reason}）`);
+          prevHotel = best.poi;
+          warnings.push(`第${dayIdx + 1}晚住「${best.poi.name}」（${best.reason}），同城后续晚默认连住，可在候选中切换`);
         } else {
           warnings.push(`第${dayIdx + 1}晚未找到合适酒店，请自行预订`);
         }
-      }
-      if (lastLoc && Number.isFinite(lastLoc.longitude)) {
+        const hotelLocFinal = day.locations[day.locations.length - 1];
+        if (hotelLocFinal && Number.isFinite(hotelLocFinal.longitude)) {
+          prevPoint = { lng: hotelLocFinal.longitude, lat: hotelLocFinal.latitude, name: hotelLocFinal.name, city: hotelLocFinal.city || city.name };
+        } else {
+          prevPoint = { lng: city.lng, lat: city.lat, name: city.name, city: city.name };
+        }
+      } else if (lastLoc && Number.isFinite(lastLoc.longitude)) {
         prevPoint = { lng: lastLoc.longitude, lat: lastLoc.latitude, name: lastLoc.name, city: lastLoc.city || city.name };
       }
       tripDays.push(day);
@@ -406,6 +479,7 @@ export async function planCorridor(input) {
       cities: order.map((c, i) => ({ name: c.name, stayDays: cityDays[i], reason: c.reason || null })),
       legs: legs.map((l) => ({ from: l.from.name || originName, to: l.to.name || originName, km: l.km, minutes: l.minutes, isReturn: Boolean(l.isReturn), estimated: Boolean(l.estimated) })),
       hints: hints.notes,
+      suggestions, // 被收紧/裁剪的 POI，可手动加回（默认可撤销）
     },
     warnings,
   };
@@ -419,21 +493,28 @@ export async function recalcTrip(input, { travelFn = null } = {}) {
   if (!trip || !Array.isArray(trip.days)) { const e = new Error('缺少 trip.days'); e.status = 400; e.expose = true; throw e; }
   const mode = trip.tripMode === 'pureTransit' ? 'transit' : 'drive';
   const warnings = [];
+  const dirCache = makeCache(30 * 60 * 1000); // 段间算路缓存：编辑重算不重复烧高德配额（direction 类不进 amapProxy 缓存）
   const doTravel = travelFn || (async (from, to) => {
     if (![from.longitude, from.latitude, to.longitude, to.latitude].every(Number.isFinite)) return null;
-    return segmentMinutes(
+    const key = `${mode}|${from.longitude.toFixed(4)},${from.latitude.toFixed(4)}|${to.longitude.toFixed(4)},${to.latitude.toFixed(4)}`;
+    const hit = dirCache.get(key);
+    if (hit) return hit;
+    const t = await segmentMinutes(
       { lng: from.longitude, lat: from.latitude, city: from.city || '' },
       { lng: to.longitude, lat: to.latitude, city: to.city || '' },
       to.city || from.city || '',
       mode
     );
+    if (t) dirCache.set(key, t);
+    return t;
   });
 
   for (const day of trip.days) {
     if (!Array.isArray(day.locations)) continue;
     let prev = null;
     for (const loc of day.locations) {
-      if (loc.type === 'transport' && loc._intercity) { prev = loc; continue; } // 跨城枢纽块不动
+      // 跨城枢纽块不动（判据用稳定字段：客户端序列化可能丢 _intercity 下划线字段）
+      if (loc.type === 'transport' && (loc._intercity || loc.transport?.scope === 'intercity')) { prev = loc; continue; }
       const stay = Math.max(15, parseInt(loc.stayMinutes, 10) || 90);
       loc.stayMinutes = stay;
       if (prev) {
