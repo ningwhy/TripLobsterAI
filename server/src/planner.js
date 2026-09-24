@@ -949,6 +949,6 @@ export function registerPlannerRoutes(app) {
 export {
   queryPois, normalizePoi, gatherCandidates, geocodeCity, haversineKm,
   clusterByDay, buildDay, findHotels, findNearbyRestaurant, segmentMinutes,
-  findRestStop, toLocation, fmt, toMin, addDays, extractHints,
+  findRestStop, findRentalHub, toLocation, fmt, toMin, addDays, extractHints,
   INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
 };

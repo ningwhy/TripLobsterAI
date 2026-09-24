@@ -11,7 +11,7 @@ import { isLlmEnabled, llmChat } from './llm.js';
 import { makeCache } from './util.js';
 import {
   gatherCandidates, geocodeCity, haversineKm, clusterByDay, buildDay,
-  findHotels, segmentMinutes, toLocation, fmt, toMin, addDays,
+  findHotels, segmentMinutes, findRentalHub, toLocation, fmt, toMin, addDays,
   extractHints, queryPois, normalizePoi,
   INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
 } from './planner.js';
@@ -124,26 +124,26 @@ async function llmSuggestCities({ origin, days, tripMode, interestLabels, desc, 
 }
 
 // ---------- S5 段间真实耗时 ----------
-async function legTime(from, to, tripMode, vehicle) {
+async function legTime(from, to, { mode = 'drive', vehicle: veh = 'highSpeedTrain', schedule = null } = {}) {
   const km = haversineKm(from, to);
-  if (tripMode !== 'pureTransit') {
-    try {
-      const data = await amapCall('/v3/direction/driving', {
-        origin: `${from.lng},${from.lat}`,
-        destination: `${to.lng},${to.lat}`,
-        strategy: '0',
-        extensions: 'base',
-      });
-      const p = data?.route?.paths?.[0];
-      const t = parseInt(p?.duration, 10);
-      const d = parseFloat(p?.distance);
-      return { minutes: Math.max(20, Math.round(t / 60)), km: Number.isFinite(d) ? d / 1000 : km };
-    } catch { /* 估算兜底 */ }
-    return { minutes: Math.max(20, Math.round((km / 80) * 60 + 15)), km };
+  if (mode === 'transit') {
+    if (schedule) return { minutes: toMin(schedule.arr) - toMin(schedule.dep), km, scheduled: true }; // 真实班次时长
+    const conf = VEHICLE_CONF[veh] || VEHICLE_CONF.highSpeedTrain;
+    return { minutes: Math.max(30, Math.round((km / conf.speedKmh) * 60 + conf.prep)), km, estimated: true };
   }
-  // 公共交通：班次实时查询需高德企业认证（与单城规划一致的边界），按工具典型速度估算
-  const conf = VEHICLE_CONF[vehicle] || VEHICLE_CONF.highSpeedTrain;
-  return { minutes: Math.max(30, Math.round((km / conf.speedKmh) * 60 + conf.prep)), km, estimated: true };
+  try {
+    const data = await amapCall('/v3/direction/driving', {
+      origin: `${from.lng},${from.lat}`,
+      destination: `${to.lng},${to.lat}`,
+      strategy: '0',
+      extensions: 'base',
+    });
+    const p = data?.route?.paths?.[0];
+    const t = parseInt(p?.duration, 10);
+    const d = parseFloat(p?.distance);
+    return { minutes: Math.max(20, Math.round(t / 60)), km: Number.isFinite(d) ? d / 1000 : km };
+  } catch { /* 估算兜底 */ }
+  return { minutes: Math.max(20, Math.round((km / 80) * 60 + 15)), km };
 }
 
 // 公共交通跨城：枢纽对（无真实班次，时长估算，诚实提示）
@@ -196,6 +196,61 @@ async function planLegStops(from, to, { ev = false, km = null } = {}) {
   return stops;
 }
 
+// ---------- 班次锚（数据模型第6类：交通枢纽跟着班次走，班次时间固定，相邻行程段只能前后推） ----------
+// 用户在 12306/航司查好班次后经 schedules 传入 → 真实固定时刻；未提供的腿按典型时长估算占位（诚实提示）
+export function parseSchedules(raw) {
+  return (Array.isArray(raw) ? raw : [])
+    .map((s) => ({
+      from: String(s.from || '').trim().replace(/(市|地区|自治州)$/, ''),
+      to: String(s.to || '').trim().replace(/(市|地区|自治州)$/, ''),
+      vehicle: ['flight', 'highSpeedTrain', 'train', 'bus', 'ship'].includes(s.vehicle) ? s.vehicle : 'highSpeedTrain',
+      no: String(s.no || '').trim(),
+      depHubName: String(s.depHub || s.depHubName || '').trim() || null,
+      arrHubName: String(s.arrHub || s.arrHubName || '').trim() || null,
+      dep: /^\d{1,2}:\d{2}$/.test(String(s.dep || '')) ? String(s.dep).padStart(5, '0') : null,
+      arr: /^\d{1,2}:\d{2}$/.test(String(s.arr || '')) ? String(s.arr).padStart(5, '0') : null,
+      price: Number.isFinite(parseFloat(s.price)) ? parseFloat(s.price) : null,
+    }))
+    // 合法钟表时刻（00:00–23:59）且 到达晚于出发，才可作为固定班次锚
+    .filter((s) => {
+      if (!s.from || !s.to || !s.dep || !s.arr || toMin(s.arr) <= toMin(s.dep)) return false;
+      const [dh, dm] = s.dep.split(':').map(Number);
+      const [ah, am] = s.arr.split(':').map(Number);
+      return dh <= 23 && dm <= 59 && ah <= 23 && am <= 59;
+    });
+}
+
+export function matchSchedule(schedules, fromName, toName) {
+  const f = String(fromName || '').replace(/(市|地区|自治州)$/, '');
+  const t = String(toName || '').replace(/(市|地区|自治州)$/, '');
+  return (schedules || []).find((s) => s.from === f && s.to === t) || null;
+}
+
+// 混合模式：落地租车/包车的城市下标（默认落地第一站）
+export function resolveRentalAtIdx(orderNames, wanted) {
+  const w = String(wanted || '').trim().replace(/(市|地区|自治州)$/, '');
+  if (w) {
+    const idx = orderNames.findIndex((n) => n === w);
+    if (idx >= 0) return idx;
+  }
+  return 0;
+}
+
+// 班次锚时间：有真实班次用真实时刻（固定锚）；否则按出发钟点+prep+典型时长估算占位
+export function buildAnchorTimes({ schedule = null, prep, startClock, legMinutes }) {
+  if (schedule) {
+    return { depMin: toMin(schedule.dep), arrMin: toMin(schedule.arr), fixed: true };
+  }
+  return { depMin: startClock + prep, arrMin: startClock + prep + legMinutes, fixed: false };
+}
+
+// 早场窗口：出发前能否塞一个景点（班次晚点才有空间；锚固定 → 相邻段只能往前推=压缩游玩时间）
+export function morningWindow({ depMin, prep, t2hubMin, startClock }) {
+  const hubArr = depMin - prep; // 必须此刻到达出发枢纽（固定锚）
+  const endMin = hubArr - t2hubMin; // 早场景点最晚离开时刻
+  return { hubArr, endMin, ok: endMin >= startClock + 90 }; // 至少 1.5h 游玩窗口才值得排
+}
+
 // ---------- 主管线：多城走廊规划 ----------
 export async function planCorridor(input) {
   const originName = String(input.origin || input.fromCity || '').trim();
@@ -204,6 +259,10 @@ export async function planCorridor(input) {
   const tripMode = ['pureDrive', 'pureTransit', 'transitPlusRental'].includes(input.tripMode) ? input.tripMode : 'pureDrive';
   const roundTrip = input.roundTrip !== false;
   const vehicle = ['flight', 'highSpeedTrain', 'train', 'bus', 'ship'].includes(input.intercityVehicle) ? input.intercityVehicle : 'highSpeedTrain';
+  // 班次锚：用户传入的真实班次（时间固定）；混合模式落地方式：租车/包车
+  const schedules = parseSchedules(input.schedules);
+  if (schedules.length) warnings.push(`已加载 ${schedules.length} 个真实班次（时间固定，前后行程按班次锚定，只能前后推）`);
+  const groundMode = input.groundMode === 'charter' ? 'charter' : 'rental';
   const warnings = [];
   const suggestions = []; // 被收紧/裁剪的 POI（可手动加回 —— 铁律：默认可撤销）
 
@@ -238,7 +297,7 @@ export async function planCorridor(input) {
   let cityInputs = (Array.isArray(input.cities) ? input.cities : [])
     .map((c) => (typeof c === 'string' ? { name: c } : c))
     .filter((c) => c && typeof c.name === 'string' && c.name.trim())
-    .map((c) => ({ name: c.name.trim().replace(/(市|地区|自治州)$/, ''), stayDays: Math.max(0, parseInt(c.stayDays, 10) || 0), reason: String(c.reason || ''), stopType: c.stopType === 'waypoint' ? 'waypoint' : 'overnight' }));
+    .map((c) => ({ name: c.name.trim().replace(/(市|地区|自治州)$/, ''), stayDays: Math.max(0, parseInt(c.stayDays, 10) || 0), reason: String(c.reason || ''), stopType: c.stopType === 'waypoint' ? 'waypoint' : 'overnight', vehicle: ['flight', 'highSpeedTrain', 'train', 'bus', 'ship'].includes(c.vehicle) ? c.vehicle : null }));
   let source = 'rule';
   if (!cityInputs.length) {
     if (!isLlmEnabled()) {
@@ -273,8 +332,22 @@ export async function planCorridor(input) {
   if (order.map((c) => c.name).join() !== cities.map((c) => c.name).join()) {
     warnings.push(`已按地理位置优化城市顺序：${order.map((c) => c.name).join(' → ')}${roundTrip ? ' → ' + originName : ''}`);
   }
-  for (const leg of legs) {
-    const t = await legTime(leg.from, leg.to, tripMode, vehicle);
+  // 混合模式（transitPlusRental）：落地租车/包车的城市（默认落地第一站），其后的城际腿改为自驾
+  const isRentalTrip = tripMode === 'transitPlusRental';
+  const rentalAtIdx = isRentalTrip ? resolveRentalAtIdx(order.map((c) => c.name), input.rentalAt) : -1;
+  if (isRentalTrip) {
+    const vehLabel = { flight: '飞机', highSpeedTrain: '高铁/火车', train: '火车', bus: '大巴', ship: '轮船' }[vehicle] || vehicle;
+    warnings.push(`混合模式：出发地→${order[rentalAtIdx].name} 乘${vehLabel}（含枢纽接驳），落地${order[rentalAtIdx].name}后${groundMode === 'charter' ? '包车' : '租车'}自驾游玩并前往后续城市`);
+  }
+
+  // 逐腿定型：纯公共交通全程；混合模式到取车城为止；用户给定班次的腿强制按公共交通
+  for (let i = 0; i < legs.length; i++) {
+    const leg = legs[i];
+    leg.schedule = matchSchedule(schedules, leg.from.name || originName, leg.to.name || originName);
+    leg.isTransit = tripMode === 'pureTransit' || (isRentalTrip && i <= rentalAtIdx) || Boolean(leg.schedule);
+    if (leg.schedule && tripMode === 'pureDrive') warnings.push(`「${leg.from.name || originName}→${leg.to.name || originName}」提供了班次，已按公共交通段处理`);
+    leg.vehicle = (leg.schedule && leg.schedule.vehicle) || (leg.isTransit && order[i] && order[i].vehicle) || vehicle;
+    const t = await legTime(leg.from, leg.to, { mode: leg.isTransit ? 'transit' : 'drive', vehicle: leg.vehicle, schedule: leg.schedule });
     leg.minutes = t.minutes;
     leg.km = Math.round(t.km * 10) / 10;
     leg.estimated = Boolean(t.estimated);
@@ -381,17 +454,39 @@ export async function planCorridor(input) {
         }
       }
 
-      // 返程日：给回家路上预留时间（反向收紧，避免最后一天排满+开夜路）
+      // 返程日：给回家路上预留时间（反向收紧，避免最后一天排满+开夜路/误车）
+      let returnTail = null; // 固定返程班次：当天尾部追加返程枢纽对（游玩被锚往前推）
       if (isTripLastDay && returnLeg) {
-        const rh = returnLeg.minutes / 60;
-        if (rh > 7) {
-          suggestions.push(...pts.map((p) => ({ name: p.name, city: city.name, reason: `返程需 ${rh.toFixed(1)} 小时建议全天赶路，未排入最后一天` })));
-          pts = [];
-          warnings.push(`最后一天全程返程（${returnLeg.km}km / ${rh.toFixed(1)}h），未安排景点；若想再玩半天，请增加总天数或压缩前面城市`);
-        } else if (rh > 4) {
-          pts = tightenDay(pts, 1);
-          startClock = 480;
-          warnings.push(`最后一天需预留返程 ${returnLeg.km}km / ${rh.toFixed(1)}h，只保留 1 个景点并 8:00 早出发`);
+        if (returnLeg.schedule) {
+          // 班次锚（固定）：当天游玩窗口 = 发车时刻 - 候车 - 去站时间
+          const conf2 = VEHICLE_CONF[returnLeg.vehicle] || VEHICLE_CONF.highSpeedTrain;
+          const sch2 = returnLeg.schedule;
+          const depMin2 = toMin(sch2.dep);
+          const arrMin2 = toMin(sch2.arr);
+          const retDepHub = sch2.depHubName ? { name: sch2.depHubName, city: city.name, lng: null, lat: null, address: city.name } : await findHub(city.name, returnLeg.vehicle);
+          const retArrHub = sch2.arrHubName ? { name: sch2.arrHubName, city: originName, lng: null, lat: null, address: originName } : await findHub(originName, returnLeg.vehicle);
+          const playMin = depMin2 - conf2.prep - 40 - START_CLOCK[pace]; // 预留 40min 从末站去车站（尾段精算）
+          const capN = Math.max(0, Math.min(2, Math.floor(playMin / 150))); // 每站约 2.5h
+          if (capN === 0) {
+            suggestions.push(...pts.map((p) => ({ name: p.name, city: city.name, reason: `返程班次 ${sch2.no || ''} ${sch2.dep} 固定，当天无游玩窗口，可改签或加天` })));
+            pts = [];
+            warnings.push(`返程班次 ${sch2.no || conf2.label} ${sch2.dep} 固定，最后一天全天赶路`);
+          } else {
+            pts = tightenDay(pts, capN);
+            warnings.push(`返程班次 ${sch2.no || conf2.label} ${sch2.dep} 固定，最后一天只保留 ${capN} 个景点，须在 ${fmt(depMin2 - conf2.prep - 40)} 前结束游玩`);
+          }
+          returnTail = { conf: conf2, sch: sch2, depMin: depMin2, arrMin: arrMin2, retDepHub, retArrHub };
+        } else {
+          const rh = returnLeg.minutes / 60;
+          if (rh > 7) {
+            suggestions.push(...pts.map((p) => ({ name: p.name, city: city.name, reason: `返程需 ${rh.toFixed(1)} 小时建议全天赶路，未排入最后一天` })));
+            pts = [];
+            warnings.push(`最后一天全程返程（${returnLeg.km}km / ${rh.toFixed(1)}h），未安排景点；若想再玩半天，请增加总天数或压缩前面城市`);
+          } else if (rh > 4) {
+            pts = tightenDay(pts, 1);
+            startClock = 480;
+            warnings.push(`最后一天需预留返程 ${returnLeg.km}km / ${rh.toFixed(1)}h，只保留 1 个景点并 8:00 早出发`);
+          }
         }
       }
 
@@ -404,8 +499,8 @@ export async function planCorridor(input) {
         warnings.push(`「${city.name}」为过路城：顺路游后继续前往${nextLeg ? nextLeg.to.name : '下一站'}，不安排住宿`);
       }
 
-      // 走廊长腿中途停靠：油车约每150km服务区休息，EV约每250km充电（P1-11/16，家庭自驾实务节奏）
-      if (d === 0 && driveMode && arriveLeg && pts.length) {
+      // 走廊长腿中途停靠（仅自驾腿）：油车约每150km服务区休息，EV约每250km充电（P1-11/16，家庭自驾实务节奏）
+      if (d === 0 && driveMode && arriveLeg && !arriveLeg.isTransit && pts.length) {
         const stops = await planLegStops(prevPoint, pts[0], { ev: ev && driveMode, km: arriveLeg.km });
         if (stops.length) {
           pts = [...stops, ...pts]; // 沿路线顺序铺在景点前，buildDay 逐段真实算路
@@ -413,46 +508,146 @@ export async function planCorridor(input) {
         }
       }
 
-      // 公共交通跨城：起点改为到达枢纽，出发钟点让位给"候车+跨城+出站"
-      let intercityHubs = null;
-      if (d === 0 && !driveMode && !arriveLeg.isReturn) {
-        const conf = VEHICLE_CONF[vehicle] || VEHICLE_CONF.highSpeedTrain;
+      // 跨城公共交通（pureTransit 全程 / 混合模式落地前）：枢纽对 + 班次锚
+      // 班次时间固定 → 之前的行程段只能往前推（压缩/舍弃），之后的段从到达枢纽顺推
+      let headLocs = []; // 枢纽对(+取车点)，插在当天头部
+      let morningDay = null; // 早场（晚班次时出发前塞 1 个景点）
+      let afternoonPts = pts;
+      let afternoonStart = startClock;
+      let afternoonOrigin = origin;
+      if (d === 0 && arriveLeg && arriveLeg.isTransit) {
+        const conf = VEHICLE_CONF[arriveLeg.vehicle] || VEHICLE_CONF.highSpeedTrain;
         const fromName = arriveLeg.from.name || originName;
-        const depHub = await findHub(fromName, vehicle);
-        const arrHub = await findHub(city.name, vehicle);
-        startClock = START_CLOCK[pace] + conf.prep + arriveLeg.minutes + 45;
-        if (Number.isFinite(arrHub.lng)) origin = { lng: arrHub.lng, lat: arrHub.lat, name: arrHub.name, city: arrHub.city };
-        intercityHubs = { depHub, arrHub, prep: conf.prep, vehicle };
-        warnings.push(`${fromName}→${city.name} 跨城班次实时查询需高德企业认证，已按${conf.label}典型时长${arriveLeg.minutes}分钟占位（预订时填真实车次/航班）`);
+        const sch = arriveLeg.schedule;
+        const depHub = sch && sch.depHubName ? { name: sch.depHubName, city: fromName, lng: null, lat: null, address: fromName } : await findHub(fromName, arriveLeg.vehicle);
+        const arrHub = sch && sch.arrHubName ? { name: sch.arrHubName, city: city.name, lng: null, lat: null, address: city.name } : await findHub(city.name, arriveLeg.vehicle);
+        const anchor = buildAnchorTimes({ schedule: sch, prep: conf.prep, startClock: START_CLOCK[pace], legMinutes: arriveLeg.minutes });
+
+        // 上一夜落点（酒店/家）→ 出发枢纽（打车/公交，真实算路）
+        const depHubGeo = Number.isFinite(depHub.lng) ? depHub : null;
+        const t2hub = depHubGeo
+          ? await segmentMinutes({ lng: prevPoint.lng, lat: prevPoint.lat, city: fromName }, depHubGeo, fromName, 'transit')
+          : null;
+
+        // 早场窗口：仅固定班次且发车晚时才有空间；放不下只能舍弃（锚固定，只能往前推）
+        const mw = morningWindow({ depMin: anchor.depMin, prep: conf.prep, t2hubMin: t2hub ? t2hub.minutes : 30, startClock: START_CLOCK[pace] });
+        if (mw.ok && pts.length) {
+          const mi = pts.findIndex((p) => p._must);
+          const morningPoi = pts.splice(mi >= 0 ? mi : 0, 1)[0];
+          morningDay = await buildDay(dayIdx, addDays(startDate, dayIdx), [morningPoi], { pace, city: city.name, warnings, tripMode, startClock: START_CLOCK[pace], origin: prevPoint });
+          const mLast = morningDay.locations[morningDay.locations.length - 1];
+          const t2hub2 = mLast && Number.isFinite(mLast.longitude) && depHubGeo
+            ? await segmentMinutes({ lng: mLast.longitude, lat: mLast.latitude, city: fromName }, depHubGeo, fromName, 'transit')
+            : t2hub;
+          if (toMin(mLast.leaveTime) + (t2hub2 ? t2hub2.minutes : 30) > mw.hubArr) {
+            suggestions.push({ name: mLast.name, city: city.name, reason: `班次 ${sch ? sch.no + ' ' : ''}${sch ? sch.dep : fmt(anchor.depMin)} 出发，早场放不下（赶去车站时间不够），可手动加回` });
+            morningDay = null;
+            pts.unshift(morningPoi); // 归还到下午池
+          }
+        }
+        afternoonPts = pts;
+
+        // 枢纽对（第6类 POI）：到达出发枢纽时刻、发车/到达时刻均为固定锚
+        const depLoc = {
+          name: depHub.name, address: depHub.address || '', latitude: depHub.lng ? depHub.lat : null, longitude: depHub.lng || null,
+          city: depHub.city || fromName, type: 'transport', hubKind: conf.hubKind,
+          stayMinutes: conf.prep,
+          transportMinutes: t2hub ? t2hub.minutes : null, transportMode: t2hub ? 'taxi' : null,
+          transport: t2hub ? { type: 'taxi', scope: 'intraCity', durationMinutes: t2hub.minutes, distance: Math.round((t2hub.km || 0) * 1000) } : null,
+          arrivalTime: fmt(mw.hubArr), leaveTime: fmt(anchor.depMin),
+          _intercity: { kind: 'dep' },
+        };
+        const arrLoc = {
+          name: arrHub.name, address: arrHub.address || '', latitude: arrHub.lng ? arrHub.lat : null, longitude: arrHub.lng || null,
+          city: arrHub.city || city.name, type: 'transport', hubKind: conf.hubKind,
+          stayMinutes: 45,
+          transportMinutes: anchor.arrMin - anchor.depMin, transportMode: arriveLeg.vehicle,
+          transport: {
+            type: arriveLeg.vehicle, scope: 'intercity', durationMinutes: anchor.arrMin - anchor.depMin,
+            distance: Math.round((arriveLeg.km || 0) * 1000),
+            flightNumber: sch ? sch.no || null : null, departureTime: fmt(anchor.depMin), arrivalTime: fmt(anchor.arrMin),
+            price: sch ? sch.price : null, isFixed: Boolean(sch), estimated: !sch,
+          },
+          arrivalTime: fmt(anchor.arrMin), leaveTime: fmt(anchor.arrMin + 45),
+          _intercity: { kind: 'arr' },
+        };
+        headLocs = [depLoc, arrLoc];
+        if (sch) {
+          warnings.push(`${conf.emoji} ${sch.no || conf.label} ${fromName} ${sch.dep} → ${city.name} ${sch.arr}（班次时间固定，前后行程已按此锚定）`);
+        } else {
+          warnings.push(`${fromName}→${city.name} 跨城班次实时查询需高德企业认证，已按${conf.label}典型时长${arriveLeg.minutes}分钟占位（可在 schedules 传入真实班次完成锚定）`);
+        }
+
+        // 混合模式：取车城落地插租车点（包车不插，师傅到达口接）
+        if (isRentalTrip && ci === rentalAtIdx) {
+          if (groundMode === 'rental') {
+            const rentalPoi = await findRentalHub(city.name, Number.isFinite(arrHub.lng) ? arrHub : city);
+            if (rentalPoi) {
+              const t2rental = Number.isFinite(arrHub.lng) && Number.isFinite(rentalPoi.lng)
+                ? await segmentMinutes({ lng: arrHub.lng, lat: arrHub.lat, city: city.name }, rentalPoi, city.name, 'transit')
+                : null;
+              const rArr = anchor.arrMin + 45 + (t2rental ? t2rental.minutes : 15);
+              const rentalLoc = toLocation({ ...rentalPoi, typecode: 'rental' }, rArr, 30, t2rental ? { minutes: t2rental.minutes, mode: 'transit', km: t2rental.km } : null, {});
+              rentalLoc.hubKind = 'rental';
+              headLocs.push(rentalLoc);
+              afternoonStart = rArr + 30;
+              if (Number.isFinite(rentalPoi.lng)) afternoonOrigin = { lng: rentalPoi.lng, lat: rentalPoi.lat, name: rentalPoi.name, city: city.name };
+              warnings.push(`已插入取车点「${rentalPoi.name}」，此后行程按自驾计算（里程/充电/费用均切自驾口径）`);
+            } else {
+              afternoonStart = anchor.arrMin + 45;
+              warnings.push('未找到合适租车点，请到达后自行安排取车');
+            }
+          } else {
+            afternoonStart = anchor.arrMin + 45;
+            warnings.push(`包车模式：师傅在「${arrHub.name}」到达口接站，行程按包车自驾计算`);
+          }
+        } else {
+          afternoonStart = anchor.arrMin + 45;
+        }
+        if (!(Number.isFinite(afternoonOrigin?.lng) && afternoonOrigin !== prevPoint)) {
+          afternoonOrigin = Number.isFinite(arrHub.lng)
+            ? { lng: arrHub.lng, lat: arrHub.lat, name: arrHub.name, city: arrHub.city }
+            : { lng: city.lng, lat: city.lat, name: city.name, city: city.name };
+        }
       }
 
-      const day = await buildDay(dayIdx, addDays(startDate, dayIdx), pts, { pace, city: city.name, warnings, tripMode, startClock, origin });
+      // 组装当天：早场（可选）+ 头部枢纽块 + 下午主体；返程固定班次再追加尾部枢纽对
+      let day;
+      if (morningDay) {
+        const afternoonDay = await buildDay(dayIdx, addDays(startDate, dayIdx), afternoonPts, { pace, city: city.name, warnings, tripMode, startClock: afternoonStart, origin: afternoonOrigin });
+        day = { date: addDays(startDate, dayIdx), dayNumber: dayIdx + 1, locations: [...morningDay.locations, ...headLocs, ...afternoonDay.locations] };
+      } else {
+        const mainDay = await buildDay(dayIdx, addDays(startDate, dayIdx), afternoonPts, { pace, city: city.name, warnings, tripMode, startClock: afternoonStart, origin: afternoonOrigin });
+        day = { ...mainDay, locations: headLocs.length ? [...headLocs, ...mainDay.locations] : mainDay.locations };
+      }
 
-      // 枢纽对插到当天头部并回填时间
-      if (intercityHubs) {
-        const mk = (poi, kind) => ({
-          name: poi.name,
-          address: poi.address || '',
-          latitude: poi.lng ? poi.lat : null,
-          longitude: poi.lng || null,
-          city: poi.city || '',
-          type: 'transport',
-          hubKind: (VEHICLE_CONF[vehicle] || VEHICLE_CONF.highSpeedTrain).hubKind,
-          stayMinutes: kind === 'dep' ? intercityHubs.prep : 45,
-          transportMinutes: kind === 'arr' ? arriveLeg.minutes : null,
-          transportMode: kind === 'arr' ? intercityHubs.vehicle : null,
-          transport: kind === 'arr' ? { type: intercityHubs.vehicle, scope: 'intercity', durationMinutes: arriveLeg.minutes, estimated: true } : null,
-          _intercity: { kind },
-        });
-        let clock = START_CLOCK[pace];
-        const depLoc = mk(intercityHubs.depHub, 'dep');
-        depLoc.arrivalTime = fmt(clock);
-        depLoc.leaveTime = fmt(clock + intercityHubs.prep);
-        clock += intercityHubs.prep;
-        const arrLoc = mk(intercityHubs.arrHub, 'arr');
-        arrLoc.arrivalTime = fmt(clock);
-        arrLoc.leaveTime = fmt(clock + 45);
-        day.locations = [depLoc, arrLoc, ...day.locations];
+      // 返程固定班次：尾部枢纽对（游玩锚定在发车前结束）
+      if (returnTail) {
+        const { conf, sch, depMin, arrMin, retDepHub, retArrHub } = returnTail;
+        const lastAct = [...day.locations].reverse().find((l) => l.type !== 'transport' && Number.isFinite(l.longitude));
+        const t2hub = lastAct && Number.isFinite(retDepHub.lng)
+          ? await segmentMinutes({ lng: lastAct.longitude, lat: lastAct.latitude, city: city.name }, retDepHub, city.name, 'transit')
+          : null;
+        const depLoc = {
+          name: retDepHub.name, address: retDepHub.address || '', latitude: retDepHub.lng ? retDepHub.lat : null, longitude: retDepHub.lng || null,
+          city: retDepHub.city || city.name, type: 'transport', hubKind: conf.hubKind,
+          stayMinutes: conf.prep,
+          transportMinutes: t2hub ? t2hub.minutes : null, transportMode: t2hub ? 'taxi' : null,
+          transport: t2hub ? { type: 'taxi', scope: 'intraCity', durationMinutes: t2hub.minutes, distance: Math.round((t2hub.km || 0) * 1000) } : null,
+          arrivalTime: fmt(depMin - conf.prep), leaveTime: fmt(depMin),
+          _intercity: { kind: 'dep' },
+        };
+        const arrLoc = {
+          name: retArrHub.name, address: retArrHub.address || '', latitude: retArrHub.lng ? retArrHub.lat : null, longitude: retArrHub.lng || null,
+          city: retArrHub.city || originName, type: 'transport', hubKind: conf.hubKind,
+          stayMinutes: 45,
+          transportMinutes: arrMin - depMin, transportMode: returnLeg.vehicle,
+          transport: { type: returnLeg.vehicle, scope: 'intercity', durationMinutes: arrMin - depMin, flightNumber: sch.no || null, departureTime: sch.dep, arrivalTime: sch.arr, price: sch.price, isFixed: true },
+          arrivalTime: fmt(arrMin), leaveTime: fmt(arrMin + 45),
+          _intercity: { kind: 'arr' },
+        };
+        day.locations.push(depLoc, arrLoc);
+        warnings.push(`返程 ${conf.emoji} ${sch.no || ''} ${city.name} ${sch.dep} → ${originName} ${sch.arr}（班次固定，当天行程已按此锚定）`);
       }
 
       // 每晚酒店（全程最后一天/过路城不排：返程到家、过路城顺路游）
@@ -470,7 +665,7 @@ export async function planCorridor(input) {
         const sameCityStay = prevHotel && String(prevHotel.city || '').replace(/(市|地区|自治州)$/, '') === cityKey;
         if (sameCityStay) {
           // 连住默认（免每天打包搬行李，旅行者真实习惯）；更优者列为"可换"候选 —— 建议不决策
-          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (startClock ?? START_CLOCK[pace]);
+          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (afternoonStart ?? startClock ?? START_CLOCK[pace]);
           const travel = lastLoc && Number.isFinite(lastLoc.longitude)
             ? await segmentMinutes({ lng: lastLoc.longitude, lat: lastLoc.latitude, city: city.name }, prevHotel, city.name, driveMode ? 'drive' : 'transit')
             : null;
@@ -488,7 +683,7 @@ export async function planCorridor(input) {
           lastLoc = hotelLoc;
         } else if (cands.length) {
           const best = cands[0];
-          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (startClock ?? START_CLOCK[pace]);
+          const base = lastLoc && toMin(lastLoc.leaveTime) ? toMin(lastLoc.leaveTime) : (afternoonStart ?? startClock ?? START_CLOCK[pace]);
           const travel = lastLoc && Number.isFinite(lastLoc.longitude)
             ? await segmentMinutes({ lng: lastLoc.longitude, lat: lastLoc.latitude, city: city.name }, best.poi, city.name, driveMode ? 'drive' : 'transit')
             : null;
@@ -524,21 +719,22 @@ export async function planCorridor(input) {
     warnings.push(`返程 ${returnLeg.from.name || ''}→${originName} 约 ${returnLeg.km}km / ${(returnLeg.minutes / 60).toFixed(1)}小时，请在最后一天预留时间（可在行程中删减当天景点）`);
   }
 
-  // P1-15 费用预估（自驾粗估：油/电费率不同，过路费单列）
-  let cost = null;
-  if (driveMode) {
-    const totalKm = Math.round(legs.reduce((s, l) => s + (l.km || 0), 0));
-    const perKm = ev ? 0.12 : 0.6;
-    cost = {
-      currency: 'CNY',
-      driveKm: totalKm,
-      fuel: Math.round(totalKm * perKm),
-      toll: Math.round(totalKm * 0.45),
-      total: Math.round(totalKm * (perKm + 0.45)),
-      assumption: ev ? '电车按 0.12元/km 电费粗估' : '油车按 0.6元/km 油费粗估',
-      note: '过路费按 0.45元/km 粗估；住宿/门票见酒店候选参考价或 /api/planner/prices',
-    };
+  // P1-15 费用预估（分段口径：自驾油/电+过路；班次票价按 schedule.price × 人数；租车/包车按天粗估）
+  const driveLegs = legs.filter((l) => !l.isTransit);
+  const driveKm = Math.round(driveLegs.reduce((s, l) => s + (l.km || 0), 0));
+  const cost = {
+    currency: 'CNY',
+    items: {},
+    note: '粗估口径：油 0.6 / 电 0.12 元/km、过路 0.45 元/km、租车 300 元/天、包车 600 元/天；班次票价以实际客票为准',
+  };
+  if (driveKm > 0) {
+    cost.items.fuel = Math.round(driveKm * (ev ? 0.12 : 0.6));
+    cost.items.toll = Math.round(driveKm * 0.45);
   }
+  const schedPriceSum = legs.reduce((s, l) => s + ((l.schedule && l.schedule.price) || 0), 0);
+  if (schedPriceSum > 0) cost.items.transit = Math.round(schedPriceSum * (party.adults + party.children));
+  if (isRentalTrip) cost.items[groundMode] = Math.max(1, days - Math.max(0, rentalAtIdx)) * (groundMode === 'rental' ? 300 : 600);
+  cost.total = Object.values(cost.items).reduce((s, n) => s + n, 0);
 
   const totalPlaces = tripDays.reduce((s, d) => s + d.locations.filter((l) => l.type === 'attraction').length, 0);
   return {
@@ -562,8 +758,16 @@ export async function planCorridor(input) {
       tripMode,
       roundTrip,
       ev: ev && driveMode,
-      cities: order.map((c, i) => ({ name: c.name, stayDays: cityDays[i], stopType: c.stopType === 'waypoint' ? 'waypoint' : 'overnight', reason: c.reason || null })),
-      legs: legs.map((l) => ({ from: l.from.name || originName, to: l.to.name || originName, km: l.km, minutes: l.minutes, isReturn: Boolean(l.isReturn), estimated: Boolean(l.estimated) })),
+      groundMode: isRentalTrip ? groundMode : null,
+      rentalAt: isRentalTrip ? order[rentalAtIdx].name : null,
+      schedulesLoaded: schedules.length,
+      cities: order.map((c, i) => ({ name: c.name, stayDays: cityDays[i], stopType: c.stopType === 'waypoint' ? 'waypoint' : 'overnight', vehicle: c.vehicle || null, reason: c.reason || null })),
+      legs: legs.map((l) => ({
+        from: l.from.name || originName, to: l.to.name || originName, km: l.km, minutes: l.minutes,
+        mode: l.isTransit ? 'transit' : 'drive', vehicle: l.vehicle || null, isReturn: Boolean(l.isReturn),
+        estimated: Boolean(l.estimated),
+        schedule: l.schedule ? { no: l.schedule.no, dep: l.schedule.dep, arr: l.schedule.arr, price: l.schedule.price, isFixed: true } : null,
+      })),
       hints: hints.notes,
       suggestions, // 被收紧/裁剪的 POI，可手动加回（默认可撤销）
       cost,

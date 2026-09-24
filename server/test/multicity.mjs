@@ -1,7 +1,7 @@
 // 多城走廊管线 · 纯逻辑单测（不依赖高德 Key / 网络）
 // 覆盖：S3 城市排序、S3.5 天数分配、S6 编辑重算（时刻表传播 + 打烊提示）
 // 运行：node test/multicity.mjs
-import { orderCities, allocateCityDays, recalcTrip, legStopCount } from '../src/multiCity.js';
+import { orderCities, allocateCityDays, recalcTrip, legStopCount, parseSchedules, matchSchedule, resolveRentalAtIdx, buildAnchorTimes, morningWindow } from '../src/multiCity.js';
 
 let failed = 0;
 function check(name, cond, extra = '') {
@@ -121,6 +121,38 @@ check('S6/trip 提示已注明衔接规则', t2.warnings.some((w) => w.includes(
 const dayScopeInput = mkTrip2(); delete dayScopeInput.scope;
 const t3 = await recalcTrip(dayScopeInput, { travelFn: fixedTravel });
 check('S6/day 默认不跨天衔接且占位时间归位', t3.trip.days[1].locations[0].arrivalTime === '09:00', t3.trip.days[1].locations[0].arrivalTime);
+
+// ---------- 6. 三模式 + 班次锚（P0 数据模型第6类：枢纽跟着班次走，班次时间固定） ----------
+const scheds = parseSchedules([
+  { from: '北京', to: '潍坊', vehicle: 'highSpeedTrain', no: 'G123', dep: '9:15', arr: '12:02', price: 268 },
+  { from: '潍坊', to: '威海', dep: '25:00', arr: '26:00' }, // 非法时刻 → 剔除
+]);
+check('班次 解析+非法时刻剔除+补零', scheds.length === 1 && scheds[0].dep === '09:15' && scheds[0].no === 'G123', JSON.stringify(scheds[0]));
+check('班次 按城市名匹配（方向敏感）', matchSchedule(scheds, '北京', '潍坊')?.no === 'G123' && matchSchedule(scheds, '潍坊', '北京') === null);
+const anchorFixed = buildAnchorTimes({ schedule: scheds[0], prep: 60, startClock: 540, legMinutes: 999 });
+check('班次锚 固定班次用真实时刻', anchorFixed.depMin === 555 && anchorFixed.arrMin === 722 && anchorFixed.fixed === true);
+const anchorEst = buildAnchorTimes({ schedule: null, prep: 60, startClock: 540, legMinutes: 270 });
+check('班次锚 无班次按估算占位', anchorEst.depMin === 600 && anchorEst.arrMin === 870 && anchorEst.fixed === false);
+const mwLate = morningWindow({ depMin: 840, prep: 60, t2hubMin: 30, startClock: 540 }); // 14:00 发车
+check('班次锚 晚班次有早场窗口(750前离开)', mwLate.ok === true && mwLate.hubArr === 780 && mwLate.endMin === 750);
+const mwEarly = morningWindow({ depMin: 555, prep: 60, t2hubMin: 30, startClock: 540 }); // 9:15 发车
+check('班次锚 早班次无早场窗口', mwEarly.ok === false);
+check('混合模式 取车城解析(指定/兜底首站)', resolveRentalAtIdx(['潍坊', '威海', '烟台'], '威海') === 1 && resolveRentalAtIdx(['潍坊', '威海'], '不存在') === 0 && resolveRentalAtIdx(['潍坊'], '') === 0);
+
+// 固定班次锚下 recalc 不可撼动：枢纽块 scope=intercity 被跳过，前段从锚往前推、后段从锚往后顺推
+const anchorTrip = {
+  trip: {
+    tripMode: 'pureTransit',
+    days: [{ date: '2026-10-01', dayNumber: 1, locations: [
+      { name: '潍坊站', type: 'transport', transport: { scope: 'intercity', departureTime: '12:02' }, arrivalTime: '11:02', leaveTime: '12:02' },
+      { name: '十笏园', latitude: 36.717, longitude: 119.105, city: '潍坊', type: 'attraction', stayMinutes: 90, arrivalTime: '12:47', leaveTime: '14:17' },
+    ] }],
+  },
+};
+const anchorRecalc = await recalcTrip(anchorTrip, { travelFn: fixedTravel });
+const aLocs = anchorRecalc.trip.days[0].locations;
+check('班次锚 重算不撼动枢纽固定时间', aLocs[0].arrivalTime === '11:02' && aLocs[0].leaveTime === '12:02', `${aLocs[0].arrivalTime}-${aLocs[0].leaveTime}`);
+check('班次锚 后段从锚顺推', aLocs[1].arrivalTime === '12:42', aLocs[1].arrivalTime);
 
 console.log(failed ? `\n${failed} test(s) FAILED` : '\nALL TESTS PASSED');
 process.exit(failed ? 1 : 0);
