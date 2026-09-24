@@ -28,9 +28,9 @@ node src/index.js  # 或 npm run dev（热重载）
 - `GET /api/weather?lat=&lon=` — Open-Meteo 16 天预报（免 Key）
 - `POST /api/planner/generate` — AI 行程生成：`{city, days, startDate, pace, interests[], mustVisit[]}`
 - `GET /api/planner/interests` — 兴趣类型列表
-- `POST /api/planner/corridor` — 多城走廊规划（S1-S5 管线）：`{origin, cities[]?, days, tripMode, roundTrip, pace, interests[], mustVisit[], party...}`；cities 不传且已配 LLM 则 AI 推荐停留城市。详见根目录 `AI规划管线设计-多城走廊.md`
-- `POST /api/planner/recalc` — 编辑重算（S6）：用户增删改查/排序后提交整包 trip，服务端以用户顺序为准重算交通与时间链
-- `GET /api/planner/prices?city=&name=&kind=hotel|ticket` — POI 价格（S7 骨架）：高德参考价 + 联盟 API 预留（OTA 反爬，不做爬虫抓取）
+- `POST /api/planner/corridor` — 多城走廊规划（S1-S5 管线）：`{origin, cities[]?, days, tripMode, roundTrip, ev, pace, interests[], mustVisit[], party...}`；cities 不传且已配 LLM 则 AI 推荐停留城市；cities 项支持 `{name, stopType:'waypoint', stayDays}`（过路城不设酒店）；`ev:true` 按每 250km 插充电停留（油车默认每 150km 服务区休息）；stats.cost 含油/电+过路费预估。详见根目录 `AI规划管线设计-多城走廊.md`
+- `POST /api/planner/recalc` — 编辑重算（S6）：`{scope:'day'|'trip', trip}`；用户增删改查/排序后提交整包 trip，scope=trip 额外做跨天衔接（次晨 9:00 从上一晚酒店出发重算首站交通）
+- `GET /api/planner/prices?city=&name=&kind=hotel|ticket` — POI 价格（S7）：top3 候选比价卡（位置/评分/参考价/时间戳）+ 联盟 API 预留（OTA 反爬，不做爬虫抓取）
 
 ## 客户端对接
 

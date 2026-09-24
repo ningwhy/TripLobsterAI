@@ -117,6 +117,7 @@ function baseStay(poi) {
   const name = String(poi.name || '');
   if (tc === 'rental') return 30; // 租车取车点
   if (/服务区/.test(name)) return 20; // 休息点
+  if (tc === 'evcharge' || /充电站|充电桩|换电站/.test(name)) return 40; // EV 补能停留
   if (/动物园|乐园|游乐园|野生动物/.test(name) || tc.startsWith('0805')) return 210;
   if (tc.startsWith('1401')) return 100;
   if (tc.startsWith('1101')) return 90;

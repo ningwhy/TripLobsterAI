@@ -11,7 +11,7 @@ import { isLlmEnabled, llmChat } from './llm.js';
 import { makeCache } from './util.js';
 import {
   gatherCandidates, geocodeCity, haversineKm, clusterByDay, buildDay,
-  findHotels, segmentMinutes, findRestStop, toLocation, fmt, toMin, addDays,
+  findHotels, segmentMinutes, toLocation, fmt, toMin, addDays,
   extractHints, queryPois, normalizePoi,
   INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
 } from './planner.js';
@@ -154,6 +154,48 @@ async function findHub(cityName, vehicle) {
   return poi || { name: `${cityName}${conf.hubKw}`, city: cityName, typecode: conf.fallbackCode, lng: null, lat: null, address: cityName };
 }
 
+// ---------- 走廊长腿中途停靠节奏（P1-11/16：家庭 2-2.5h 一停；EV 按补能半径） ----------
+export function legStopCount(km, ev = false) {
+  const interval = ev ? 250 : 150;
+  if (km < interval) return 0;
+  return Math.min(4, Math.floor(km / interval)); // 单腿封顶 4 个，防极端
+}
+
+async function findLegPoi(center, keywords, radius) {
+  try {
+    const data = await amapCall('/v3/place/around', {
+      location: `${center.lng.toFixed(5)},${center.lat.toFixed(5)}`,
+      keywords,
+      radius: String(radius),
+      offset: '5',
+      page: '1',
+      extensions: 'base',
+      sortrule: 'distance',
+    });
+    const pois = (data?.pois || []).map(normalizePoi).filter(Boolean);
+    return pois[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+// 沿腿均匀取停靠点：油车服务区休息（baseStay 20min）；EV 充电站补能（typecode=evcharge → 40min）
+async function planLegStops(from, to, { ev = false, km = null } = {}) {
+  const totalKm = km ?? haversineKm(from, to);
+  const n = legStopCount(totalKm, ev);
+  const stops = [];
+  for (let i = 1; i <= n; i++) {
+    const f = Math.min(0.92, (i * (ev ? 250 : 150)) / totalKm);
+    const mid = { lng: from.lng + (to.lng - from.lng) * f, lat: from.lat + (to.lat - from.lat) * f };
+    const poi = await findLegPoi(mid, ev ? '充电站' : '服务区', ev ? 10000 : 30000);
+    if (poi && !stops.some((s) => s.id === poi.id)) {
+      if (ev) poi.typecode = 'evcharge'; // planner.baseStay 识别为 40min 补能停留
+      stops.push(poi);
+    }
+  }
+  return stops;
+}
+
 // ---------- 主管线：多城走廊规划 ----------
 export async function planCorridor(input) {
   const originName = String(input.origin || input.fromCity || '').trim();
@@ -183,6 +225,9 @@ export async function planCorridor(input) {
   };
   const budgetKey = ['economy', 'comfort', 'luxury'].includes(input.budget) ? input.budget : 'comfort';
   const driveMode = tripMode !== 'pureTransit';
+  // P1-11：EV 模式（显式 ev:true，或从描述识别电车）
+  const ev = input.ev === true || /电动车|纯电|特斯拉|model\s*[3xy]/i.test(String(input.description || ''));
+  if (ev && driveMode) warnings.push('已按 EV 模式规划：约每 250km 插入一次充电停留（40分钟）');
   const cap = PER_DAY_CAP[pace];
 
   // 出发地定位
@@ -193,7 +238,7 @@ export async function planCorridor(input) {
   let cityInputs = (Array.isArray(input.cities) ? input.cities : [])
     .map((c) => (typeof c === 'string' ? { name: c } : c))
     .filter((c) => c && typeof c.name === 'string' && c.name.trim())
-    .map((c) => ({ name: c.name.trim().replace(/(市|地区|自治州)$/, ''), stayDays: Math.max(0, parseInt(c.stayDays, 10) || 0), reason: String(c.reason || '') }));
+    .map((c) => ({ name: c.name.trim().replace(/(市|地区|自治州)$/, ''), stayDays: Math.max(0, parseInt(c.stayDays, 10) || 0), reason: String(c.reason || ''), stopType: c.stopType === 'waypoint' ? 'waypoint' : 'overnight' }));
   let source = 'rule';
   if (!cityInputs.length) {
     if (!isLlmEnabled()) {
@@ -240,6 +285,21 @@ export async function planCorridor(input) {
   // S3.5：天数分配
   const weights = order.map((c) => c.stayDays || 0);
   const { days: cityDays, legSum } = allocateCityDays(days, order.length, legHours, weights);
+  // 过路城（waypoint）：不设酒店顺路游，强制 1 天，回收天数给权重最高的过夜城（P1-12）
+  const wpIdx = [];
+  let freedDays = 0;
+  order.forEach((c, i) => {
+    if (c.stopType === 'waypoint') {
+      wpIdx.push(i);
+      if (cityDays[i] > 1) { freedDays += cityDays[i] - 1; cityDays[i] = 1; }
+    }
+  });
+  if (freedDays > 0) {
+    let mi = -1, mv = -1;
+    order.forEach((c, i) => { if (c.stopType !== 'waypoint' && cityDays[i] > mv) { mv = cityDays[i]; mi = i; } });
+    if (mi >= 0) cityDays[mi] += freedDays;
+    warnings.push(`过路城不设酒店：${wpIdx.map((i) => order[i].name).join('、')} 各安排 1 天顺路游，回收的 ${freedDays} 天已加给「${order[mi].name}」`);
+  }
   const sumCityDays = cityDays.reduce((a, b) => a + b, 0);
   const totalLegH = legHours.reduce((a, b) => a + b, 0);
   if (totalLegH > days * 7) {
@@ -335,12 +395,21 @@ export async function planCorridor(input) {
         }
       }
 
-      // 自驾长腿（>250km）：先插入高速服务区休息点（走廊式长线刚需）
-      if (d === 0 && driveMode && arriveLeg && arriveLeg.km > 250 && pts.length) {
-        const rest = await findRestStop(prevPoint, pts[0]);
-        if (rest) {
-          pts.unshift(rest);
-          warnings.push(`第${dayIdx + 1}天赶路 ${arriveLeg.km}km，已在中途插入「${rest.name}」休息点`);
+      // 过路城：顺路停留不设酒店，按"到达+出发"总车程收紧到 1-2 站（P1-12）
+      const isWaypoint = city.stopType === 'waypoint';
+      const nextLeg = legs[ci + 1] && !legs[ci + 1].isReturn ? legs[ci + 1] : null;
+      if (isWaypoint && d === 0) {
+        const totalH = (arriveLeg ? arriveLeg.minutes / 60 : 0) + (nextLeg ? nextLeg.minutes / 60 : 0);
+        pts = tightenDay(pts, totalH > 6 ? 1 : 2);
+        warnings.push(`「${city.name}」为过路城：顺路游后继续前往${nextLeg ? nextLeg.to.name : '下一站'}，不安排住宿`);
+      }
+
+      // 走廊长腿中途停靠：油车约每150km服务区休息，EV约每250km充电（P1-11/16，家庭自驾实务节奏）
+      if (d === 0 && driveMode && arriveLeg && pts.length) {
+        const stops = await planLegStops(prevPoint, pts[0], { ev: ev && driveMode, km: arriveLeg.km });
+        if (stops.length) {
+          pts = [...stops, ...pts]; // 沿路线顺序铺在景点前，buildDay 逐段真实算路
+          warnings.push(`第${dayIdx + 1}天已按${ev ? 'EV补能' : '家庭节奏'}插入 ${stops.length} 个中途停留点：${stops.map((s) => s.name).join('、')}`);
         }
       }
 
@@ -386,9 +455,9 @@ export async function planCorridor(input) {
         day.locations = [depLoc, arrLoc, ...day.locations];
       }
 
-      // 每晚酒店（全程最后一天不排：返程到家/或由用户加）
+      // 每晚酒店（全程最后一天/过路城不排：返程到家、过路城顺路游）
       let lastLoc = day.locations[day.locations.length - 1];
-      if (!isTripLastDay) {
+      if (!isTripLastDay && !isWaypoint) {
         if (!lastLoc) warnings.push(`第${dayIdx + 1}天「${city.name}」无候选景点，仅安排住宿休整`);
         const anchorPoi = lastLoc && Number.isFinite(lastLoc.longitude) ? { lng: lastLoc.longitude, lat: lastLoc.latitude } : { lng: city.lng, lat: city.lat };
         // 选址兼顾两头：今晚末站(0.7) + 次日首站/下一城方向(0.6/0.4) —— 避免酒店扎堆在今晚景点旁、明早绕远路
@@ -455,6 +524,22 @@ export async function planCorridor(input) {
     warnings.push(`返程 ${returnLeg.from.name || ''}→${originName} 约 ${returnLeg.km}km / ${(returnLeg.minutes / 60).toFixed(1)}小时，请在最后一天预留时间（可在行程中删减当天景点）`);
   }
 
+  // P1-15 费用预估（自驾粗估：油/电费率不同，过路费单列）
+  let cost = null;
+  if (driveMode) {
+    const totalKm = Math.round(legs.reduce((s, l) => s + (l.km || 0), 0));
+    const perKm = ev ? 0.12 : 0.6;
+    cost = {
+      currency: 'CNY',
+      driveKm: totalKm,
+      fuel: Math.round(totalKm * perKm),
+      toll: Math.round(totalKm * 0.45),
+      total: Math.round(totalKm * (perKm + 0.45)),
+      assumption: ev ? '电车按 0.12元/km 电费粗估' : '油车按 0.6元/km 油费粗估',
+      note: '过路费按 0.45元/km 粗估；住宿/门票见酒店候选参考价或 /api/planner/prices',
+    };
+  }
+
   const totalPlaces = tripDays.reduce((s, d) => s + d.locations.filter((l) => l.type === 'attraction').length, 0);
   return {
     trip: {
@@ -476,21 +561,26 @@ export async function planCorridor(input) {
       pace,
       tripMode,
       roundTrip,
-      cities: order.map((c, i) => ({ name: c.name, stayDays: cityDays[i], reason: c.reason || null })),
+      ev: ev && driveMode,
+      cities: order.map((c, i) => ({ name: c.name, stayDays: cityDays[i], stopType: c.stopType === 'waypoint' ? 'waypoint' : 'overnight', reason: c.reason || null })),
       legs: legs.map((l) => ({ from: l.from.name || originName, to: l.to.name || originName, km: l.km, minutes: l.minutes, isReturn: Boolean(l.isReturn), estimated: Boolean(l.estimated) })),
       hints: hints.notes,
       suggestions, // 被收紧/裁剪的 POI，可手动加回（默认可撤销）
+      cost,
     },
     warnings,
   };
 }
 
 // ---------- S6 编辑重算：用户增删改查/排序后，自动重算时刻表 ----------
-// 输入：{ trip: { tripMode, days: [{ date, dayNumber, locations: [...] }] } }
+// 输入：{ scope: 'day'|'trip', trip: { tripMode, days: [{ date, dayNumber, locations: [...] }] } }
+// scope=day（默认）：只重算各天内部的时间链；scope=trip：额外做跨天衔接——
+//   次晨按"9:00 从上一晚酒店出发"重算当天首站的真实交通（用户调整跨天顺序后整条链顺一遍）。
 // 规则：只重算时间和交通（用户顺序与停留时长为准），不删用户数据；打烊冲突只提示不擅改。
 export async function recalcTrip(input, { travelFn = null } = {}) {
   const trip = input && input.trip;
   if (!trip || !Array.isArray(trip.days)) { const e = new Error('缺少 trip.days'); e.status = 400; e.expose = true; throw e; }
+  const scope = input.scope === 'trip' ? 'trip' : 'day';
   const mode = trip.tripMode === 'pureTransit' ? 'transit' : 'drive';
   const warnings = [];
   const dirCache = makeCache(30 * 60 * 1000); // 段间算路缓存：编辑重算不重复烧高德配额（direction 类不进 amapProxy 缓存）
@@ -509,8 +599,25 @@ export async function recalcTrip(input, { travelFn = null } = {}) {
     return t;
   });
 
+  let prevDayHotel = null;
+  let tripChained = false;
   for (const day of trip.days) {
     if (!Array.isArray(day.locations)) continue;
+    // scope=trip：跨天衔接（P1-13）——上一晚酒店 → 次晨 9:00 出发 → 当天首站
+    if (scope === 'trip' && prevDayHotel && day.locations.length) {
+      const first = day.locations[0];
+      const firstIsHub = first.type === 'transport' && (first._intercity || first.transport?.scope === 'intercity');
+      if (!firstIsHub && first.type !== 'hotel' && [prevDayHotel.longitude, prevDayHotel.latitude, first.longitude, first.latitude].every(Number.isFinite)) {
+        const t = await doTravel(prevDayHotel, first);
+        if (t) {
+          first.transportMinutes = t.minutes;
+          first.transportMode = mode;
+          first.transport = { type: mode === 'drive' ? 'selfDrive' : 'transit', scope: 'intraCity', durationMinutes: t.minutes, distance: Math.round((t.km || 0) * 1000) };
+          first.arrivalTime = fmt(540 + t.minutes);
+          tripChained = true;
+        }
+      }
+    }
     let prev = null;
     for (const loc of day.locations) {
       // 跨城枢纽块不动（判据用稳定字段：客户端序列化可能丢 _intercity 下划线字段）
@@ -529,7 +636,7 @@ export async function recalcTrip(input, { travelFn = null } = {}) {
       }
       const arrival = prev && loc.transportMinutes != null
         ? toMin(prev.leaveTime) + loc.transportMinutes
-        : (toMin(loc.arrivalTime) ?? 540);
+        : (toMin(loc.arrivalTime) || 540); // 首站无有效时间（含 '00:00' 占位）默认 9:00
       loc.arrivalTime = fmt(arrival);
       loc.leaveTime = fmt(arrival + stay);
       const closeMin = toMin(loc.closeTime);
@@ -538,30 +645,46 @@ export async function recalcTrip(input, { travelFn = null } = {}) {
       }
       prev = loc;
     }
+    // 记录当晚酒店，供次晨跨天衔接（取当天最后一个酒店类点）
+    for (let i = day.locations.length - 1; i >= 0; i--) {
+      const l = day.locations[i];
+      if (l.type === 'hotel' && Number.isFinite(l.longitude)) {
+        prevDayHotel = { longitude: l.longitude, latitude: l.latitude, city: l.city || '' };
+        break;
+      }
+    }
   }
+  if (tripChained) warnings.push('已按"次晨 9:00 从上一晚酒店出发"重算各天首站交通（scope=trip）');
   return { trip, warnings };
 }
 
 // ---------- S7 实时价格（骨架）：高德参考价 + 联盟API预留 + 反爬红线 ----------
 // 教训（北京-威海实测）：OTA 页面（携程/Trip.com）有 whaleguard 等反爬，禁止爬虫抓取；
 // 实时价的唯一正路是联盟 API（携程联盟/美团联盟），未接入前只给参考价 + 官方 H5 入口 + 时间戳。
+// P1-14 比价卡：返回 top3 候选并列（位置/评分/参考价），单一数字参考价易误导。
 export async function lookupPrice({ city, name, kind = 'hotel' }) {
   if (!city || !name) { const e = new Error('需要 city 与 name 参数'); e.status = 400; e.expose = true; throw e; }
   const isHotel = kind !== 'ticket';
   const raw = await queryPois(city, { keywords: name, types: isHotel ? '100000' : '' }, 1);
-  const norms = raw.map(normalizePoi).filter(Boolean);
-  const norm = norms.find((p) => p.name && p.name.includes(String(name).slice(0, 4))) || norms[0] || null;
-  let reference = null;
-  if (norm) {
-    const rawPoi = raw.find((p) => p.id === norm.id);
-    const cost = String(rawPoi?.biz_ext?.cost || '').match(/(\d+)(?:\s*-\s*(\d+))?/);
-    if (cost) reference = { low: parseInt(cost[1], 10), high: cost[2] ? parseInt(cost[2], 10) : parseInt(cost[1], 10), currency: 'CNY' };
-  }
+  const now = new Date();
+  const candidates = raw.map(normalizePoi).filter(Boolean).slice(0, 3)
+    .map((p) => {
+      const rawPoi = raw.find((r) => r.id === p.id);
+      const cost = String(rawPoi?.biz_ext?.cost || '').match(/(\d+)(?:\s*-\s*(\d+))?/);
+      return {
+        name: p.name, address: p.address, latitude: p.lat, longitude: p.lng, rating: p.rating || null,
+        reference: cost ? { low: parseInt(cost[1], 10), high: cost[2] ? parseInt(cost[2], 10) : parseInt(cost[1], 10), currency: 'CNY' } : null,
+        source: 'amap-static（滞后参考，预订前以平台实时价为准）',
+      };
+    })
+    .sort((a, b) => (b.rating || 0) - (a.rating || 0));
+  const withPrice = candidates.find((c) => c.reference);
   return {
     kind: isHotel ? 'hotel' : 'ticket',
     name, city,
-    poi: norm ? { name: norm.name, address: norm.address, latitude: norm.lat, longitude: norm.lng, rating: norm.rating || null } : null,
-    reference,
+    poi: candidates[0] || null,
+    candidates,
+    reference: withPrice ? withPrice.reference : null,
     realTime: {
       available: false,
       provider: 'ctrip-union (P0-5 预留)',
@@ -569,8 +692,9 @@ export async function lookupPrice({ city, name, kind = 'hotel' }) {
       note: 'OTA 页面有反爬，不做爬虫抓取；实时价请接入联盟 API（携程联盟/美团联盟），CPS 佣金同源',
     },
     source: 'amap-static',
-    fetchedAt: new Date().toISOString(),
-    warning: reference ? null : `高德无「${name}」的参考价数据`,
+    fetchedAt: now.toISOString(),
+    fetchedAtText: `截至 ${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`, // 比价卡三红线之一：标时间戳
+    warning: candidates.length ? (withPrice ? null : '高德无参考价数据，仅返回候选位置信息') : `高德未搜到「${name}」`,
   };
 }
 
