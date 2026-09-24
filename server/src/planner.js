@@ -943,3 +943,11 @@ export function registerPlannerRoutes(app) {
     res.json({ interests: Object.entries(INTERESTS).map(([key, v]) => ({ key, label: v.label })) });
   });
 }
+
+// ---------- 供多城走廊管线（multiCity.js）复用的内部构件 ----------
+export {
+  queryPois, normalizePoi, gatherCandidates, geocodeCity, haversineKm,
+  clusterByDay, buildDay, findHotels, findNearbyRestaurant, segmentMinutes,
+  findRestStop, toLocation, fmt, toMin, addDays, extractHints,
+  INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
+};

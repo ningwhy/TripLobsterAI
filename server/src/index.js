@@ -8,6 +8,7 @@ import { registerSyncRoutes } from './sync.js';
 import { registerAmapRoutes } from './amapProxy.js';
 import { registerWeatherRoutes } from './weather.js';
 import { registerPlannerRoutes } from './planner.js';
+import { registerMultiCityRoutes } from './multiCity.js';
 import { registerCorridorRoutes } from './corridor.js';
 import { registerGeoRoutes } from './geo.js';
 
@@ -44,6 +45,7 @@ registerSyncRoutes(app, db);
 registerAmapRoutes(app, db);
 registerWeatherRoutes(app);
 registerPlannerRoutes(app, db);
+registerMultiCityRoutes(app);
 registerCorridorRoutes(app);
 registerGeoRoutes(app);
 
