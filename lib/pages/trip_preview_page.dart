@@ -1,18 +1,49 @@
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import '../models/price_quote.dart';
 import '../models/trip_models.dart';
-import '../theme/app_colors.dart';
-import '../services/api_client.dart';
+import '../models/trip_cost.dart';
+import '../services/price_repository.dart';
+import '../services/price_source.dart';
+import '../services/weather_repository.dart';
+import '../theme/preview_theme.dart';
+import '../utils/cost_aggregator.dart';
+import '../utils/date_fix.dart';
+import '../utils/ota_deeplink.dart';
 import '../providers/trip_provider.dart';
+import '../widgets/timeline/day_anchor_table.dart';
+import '../widgets/timeline/day_cost_bar.dart';
+import '../widgets/timeline/day_group_header.dart';
+import '../widgets/timeline/day_strip.dart';
+import '../widgets/timeline/location_card.dart';
+import '../widgets/timeline/members_bar.dart';
+import '../widgets/timeline/price_refresh_bar.dart';
+import '../widgets/timeline/preview_top_bar.dart';
+import '../widgets/timeline/timeline_row.dart';
 import 'trip_create_page.dart';
 import 'trip_map_page.dart';
 import 'route_poster_page.dart';
 import 'schematic_map_page.dart';
 import 'location_search_page.dart';
 
-/// 行程预览：时间轴 + 渐变地点卡 + 交通行 + 天气/停留信息（参考视觉稿）
+/// 行程预览：常驻头 + 单个长列表 + 运行时聚合层
+///
+/// 结构（设计 §1.3 方案 A）：
+/// ```
+/// Scaffold └ Column
+///   ├ PreviewTopBar     (navy 常驻)
+///   ├ MembersBar        (成员为空整块隐藏)
+///   ├ DayStrip          (常驻，≤7 等分 / >7 横滚)
+///   ├ PriceRefreshBar   (常驻)
+///   └ Expanded └ NotificationListener └ ListView
+///        └ for each day: DayGroupHeader(锚点) + TimelineBlock + DayCostBar
+/// ```
+///
+/// 【裁 1】当日已计价**不取中值**（取中值即估算）；分组尾显完整区间，日期条显下限。
+/// 【PR-09】整日无可计价项 → `暂无可计价数据`，**不显示金额、不显示 `¥—`、绝不 `¥0`**。
+/// 【M9】首屏 0 次 `/api/planner/prices`；【FX-06a】酒店/景点永久 0 次价格请求。
 class TripPreviewPage extends StatefulWidget {
   final Trip trip;
 
@@ -31,54 +62,111 @@ class _Slot {
 }
 
 class _TripPreviewPageState extends State<TripPreviewPage> {
-  int _selectedDayIndex = 0;
-  final Map<int, int?> _dayTemp = {}; // dayIndex -> 当日最高温
-  bool _weatherLoading = false;
+  int _activeDayIndex = 0;
+  late final ScrollController _scrollController;
+  final ScrollController _dayStripController = ScrollController();
+  final GlobalKey _listKey = GlobalKey();
+  late DayAnchorTable _anchor;
 
-  static const _weekdays = ['星期一', '星期二', '星期三', '星期四', '星期五', '星期六', '星期日'];
+  late final WeatherRepository _weather;
+  late final PriceRepository _prices;
+
+  /// 价格数据源（PR-10）：语义与乘数全在这里，页面与聚合器都不含数据源语义。
+  /// 将来切 OTA 只改这一行为 `OtaLivePriceSource()`。
+  final PriceSource _priceSource = const AmapReferencePriceSource();
 
   @override
   void initState() {
     super.initState();
-    _loadWeather();
+    _scrollController = ScrollController();
+    _weather = WeatherRepository();
+    _prices = PriceRepository(source: _priceSource);
+    _prices.addListener(_onPricesChanged);
+    _weather.addListener(_onWeatherChanged);
+    _anchor = DayAnchorTable(dayCount: _days.length);
+    // 天气并发预取（不阻塞首屏）
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      _weather.prefetch(_days);
+      _scheduleMeasure();
+    });
   }
 
-  Future<void> _loadWeather() async {
-    if (_weatherLoading) return;
-    _weatherLoading = true;
-    final days = widget.trip.days;
-    for (var i = 0; i < days.length; i++) {
-      final locWithCoord = days[i].locations.firstWhere(
-        (l) => l.latitude != null && l.longitude != null,
-        orElse: () => days[i].locations.isNotEmpty ? days[i].locations.first : Location(name: '', address: '', type: LocationType.other),
+  @override
+  void dispose() {
+    _prices.removeListener(_onPricesChanged);
+    _weather.removeListener(_onWeatherChanged);
+    _scrollController.dispose();
+    _dayStripController.dispose();
+    super.dispose();
+  }
+
+  void _onPricesChanged() {
+    if (!mounted) return;
+    setState(_anchor.markDirty); // 价格徽章改变卡片高度 → 偏移表失效，下一帧重测
+  }
+
+  void _onWeatherChanged() {
+    if (!mounted) return;
+    setState(_anchor.markDirty);
+  }
+
+  void _scheduleMeasure() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      final ctx = _listKey.currentContext;
+      if (ctx == null || !_scrollController.hasClients) return;
+      final box = ctx.findRenderObject();
+      if (box is! RenderBox) return;
+      _anchor.measure(box, _scrollController.position);
+    });
+  }
+
+  // ---------------- 数据 ----------------
+
+  /// 展示用天列表：先做 FX-04 存量日期校正（**不写库**，用户编辑时才写回）
+  List<TripDay> get _days {
+    final trip = widget.trip;
+    if (trip.days.isEmpty) {
+      return List<TripDay>.generate(
+        3,
+        (i) => TripDay(
+          date: trip.startDate.add(Duration(days: i)),
+          dayNumber: i + 1,
+          locations: const [],
+        ),
       );
-      if (locWithCoord.latitude == null) continue;
-      try {
-        final w = await ApiClient.weather(locWithCoord.latitude!, locWithCoord.longitude!);
-        final times = (w['daily']?['time'] as List?)?.cast<String>() ?? [];
-        final temps = (w['daily']?['temperature_2m_max'] as List?)?.cast<num>() ?? [];
-        final dateStr = DateFormat('yyyy-MM-dd').format(days[i].date);
-        final idx = times.indexOf(dateStr);
-        if (idx >= 0 && idx < temps.length) {
-          if (mounted) setState(() => _dayTemp[i] = temps[idx].round());
-        }
-      } catch (_) {
-        // 天气失败静默降级
-      }
     }
-    _weatherLoading = false;
+    return DateFix.corrected(trip);
   }
 
-  List<TripDay> get _days => widget.trip.days.isEmpty
-      ? List.generate(
-          3,
-          (i) => TripDay(
-            date: widget.trip.startDate.add(Duration(days: i)),
-            dayNumber: i + 1,
-            locations: [],
-          ),
-        )
-      : widget.trip.days;
+  /// 用户任一次编辑时把校正后的日期写回（FX-04）
+  void _persistDays(List<TripDay> days) {
+    widget.trip.days = days;
+  }
+
+  /// 当日聚合（每次 build 现算，不落库 —— PRD TL-07）
+  ///
+  /// 乘法与"哪些类型可计价"全部由 `_priceSource` 决定，聚合器只做区间相加。
+  DayCost _costOf(TripDay day) =>
+      CostAggregator.aggregateDay(day, widget.trip, _prices.snapshot, _priceSource);
+
+  PriceQuote? _quoteOf(Location loc) =>
+      _prices.snapshot[PriceRepositoryKey.of(loc.city, loc.name)];
+
+  /// 营业时间冲突（红框）：到达 + 停留 超出 closeTime
+  bool _isConflict(Location loc, _Slot slot) {
+    final close = loc.closeTime;
+    if (close == null) return false;
+    final parts = close.split(':');
+    if (parts.length < 2) return false;
+    final h = int.tryParse(parts[0]);
+    final m = int.tryParse(parts[1]);
+    if (h == null || m == null) return false;
+    return slot.leave > h * 60 + m;
+  }
+
+  // ---------------- 时刻推算（服务端 arrivalTime 优先）----------------
 
   String _fmt(int min) {
     final m = ((min % 1440) + 1440) % 1440;
@@ -92,69 +180,167 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
     return m == 0 ? '$h小时' : '$h小时$m分';
   }
 
+  /// 时刻表：服务端 `arrivalTime` 非空则直接用；否则回退 9:00 累加（FX-02 验收②）
   List<_Slot> _slots(TripDay day) {
-    int clock = 9 * 60;
+    var clock = 9 * 60;
     final out = <_Slot>[];
     for (final loc in day.locations) {
       final travel = (loc.transportMinutes != null && loc.transportMinutes! > 0) ? loc.transportMinutes : null;
       if (travel != null) clock += travel;
       final stay = loc.stayMinutes ?? 60;
-      out.add(_Slot(loc, clock, clock + stay, travel));
-      clock += stay;
+      final serverArrival = _toMin(loc.arrivalTime);
+      final arrival = serverArrival ?? clock;
+      final serverLeave = _toMin(loc.leaveTime);
+      final leave = serverLeave ?? (arrival + stay);
+      out.add(_Slot(loc, arrival, leave, travel));
+      clock = leave;
     }
     return out;
   }
 
+  int? _toMin(String? hhmm) {
+    if (hhmm == null || hhmm.isEmpty) return null;
+    final p = hhmm.split(':');
+    if (p.length < 2) return null;
+    final h = int.tryParse(p[0]);
+    final m = int.tryParse(p[1]);
+    if (h == null || m == null) return null;
+    return h * 60 + m;
+  }
+
+  // ---------------- 交互 ----------------
+
+  void _onDayTap(int i) {
+    setState(() => _activeDayIndex = i); // 立即高亮，不等动画
+    _anchor.isProgrammatic = true;
+    final target = _anchor.targetFor(i);
+    if (target == null) {
+      // 偏移表尚未测量 → 下一帧重测后重试一次
+      _scheduleMeasure();
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted) return;
+        final t = _anchor.targetFor(i);
+        if (t != null) _animateTo(t, i);
+        else _anchor.isProgrammatic = false;
+      });
+      return;
+    }
+    _animateTo(target, i);
+  }
+
+  Future<void> _animateTo(double target, int i) async {
+    await _scrollController.animateTo(
+      target,
+      duration: const Duration(milliseconds: 350),
+      curve: Curves.easeInOut,
+    );
+    if (!mounted) return;
+    _anchor.isProgrammatic = false;
+    // 动画结束做一次 spy 校正（防停在两个分组之间）
+    final idx = _anchor.activeIndex(_scrollController.offset);
+    if (idx != _activeDayIndex) setState(() => _activeDayIndex = idx);
+  }
+
+  bool _onScroll(ScrollNotification n) {
+    if (_anchor.isDirty) _scheduleMeasure();
+    if (_anchor.isProgrammatic) return false; // 程序化滚动期间不抢高亮
+    if (!_scrollController.hasClients) return false;
+    final idx = _anchor.activeIndex(_scrollController.offset);
+    if (idx != _activeDayIndex) setState(() => _activeDayIndex = idx);
+    return false;
+  }
+
+  /// 行程级副标题：出发日期 + 总天数。
+  ///
+  /// 【TL-10 回归】旧版预览页顶部有「出发日期」元信息卡，重写时整条掉了，此处补回。
+  /// 分组头虽有每天日期，但行程级出发日与天数是另一回事——用户核对"这趟行程
+  /// 拿对了没"看的是出发日，不是其中某一天。
+  String get _tripSubtitle {
+    final d = widget.trip.startDate;
+    final ymd = '${d.year.toString().padLeft(4, '0')}-'
+        '${d.month.toString().padLeft(2, '0')}-'
+        '${d.day.toString().padLeft(2, '0')}';
+    return '出发 $ymd · 共 ${widget.trip.totalDays} 天';
+  }
+
+  // ---------------- build ----------------
+
   @override
   Widget build(BuildContext context) {
     final days = _days;
-    if (_selectedDayIndex >= days.length) _selectedDayIndex = 0;
-    final day = days[_selectedDayIndex];
+    if (_activeDayIndex >= days.length) _activeDayIndex = 0;
+    if (_anchor.dayCount != days.length) {
+      _anchor = DayAnchorTable(dayCount: days.length);
+      _scheduleMeasure();
+    }
+
+    final costTexts = days.map((d) => CostAggregator.lowerBoundText(_costOf(d).low)).toList();
+    final hasHome = days
+        .map((d) => d.locations.any((l) => l.type == LocationType.home))
+        .toList();
 
     return Scaffold(
-      backgroundColor: AppColors.mintBg,
-      appBar: AppBar(
-        backgroundColor: Colors.white,
-        elevation: 0,
-        title: const Text('行程预览', style: TextStyle(color: AppColors.textPrimary, fontSize: 17, fontWeight: FontWeight.bold)),
-        centerTitle: true,
-        iconTheme: const IconThemeData(color: AppColors.textPrimary),
-        actions: [
-          IconButton(
-            icon: const Icon(Icons.edit_outlined, size: 20),
-            tooltip: '编辑行程',
-            onPressed: () {
-              context.read<TripProvider>().setCurrentTrip(widget.trip);
-              Navigator.push(context, MaterialPageRoute(builder: (_) => TripCreatePage(trip: widget.trip)));
-            },
-          ),
-          IconButton(
-            icon: const Icon(Icons.ios_share, size: 20),
-            tooltip: '行程海报',
-            onPressed: () => _showPosterSheet(),
-          ),
-          const SizedBox(width: 4),
-        ],
-      ),
-      body: Column(
-        children: [
-          _buildMetaCard(days),
-          Expanded(
-            child: ListView(
-              padding: const EdgeInsets.fromLTRB(16, 4, 16, 96),
-              children: [
-                _buildDayStrip(day),
-                const SizedBox(height: 12),
-                if (day.locations.isEmpty)
-                  _buildEmptyDay()
-                else
-                  ..._slots(day).map((s) => _buildTimelineEntry(s, day.locations.indexOf(s.location) == day.locations.length - 1)),
-                const SizedBox(height: 16),
-                _buildCostCard(),
-              ],
+      backgroundColor: PreviewColors.pageBg,
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          children: [
+            PreviewTopBar(
+              onBack: () => Navigator.of(context).maybePop(),
+              onEdit: _openEdit,
+              onPoster: _showPosterSheet,
+              onSave: _saveTrip,
+              subtitle: _tripSubtitle,
             ),
-          ),
-        ],
+            MembersBar(trip: widget.trip, onInvite: _onInvite),
+            Container(
+              color: PreviewColors.navy,
+              padding: const EdgeInsets.fromLTRB(10, 2, 10, 8),
+              child: DayStrip(
+                days: days,
+                activeIndex: _activeDayIndex,
+                costTexts: costTexts,
+                hasHome: hasHome,
+                onTap: _onDayTap,
+                scrollController: days.length > 7 ? _dayStripController : null,
+              ),
+            ),
+            PriceRefreshBar(
+              loading: _prices.isLoading,
+              // 【A-15】置灰**由数据源驱动**：只要有任一地点「既计价、又需要联网」就亮起。
+              //
+              // 两层判断缺一不可（架构师 v1.9 指出，采纳）：
+              // - `supports(l)`    = 该类型是否被计价（餐饮/跨城 ✅，酒店/景点 ❌）
+              // - `needsNetwork(l)` = 是否需要联网取价（本轮恒 false）
+              // 少了 `supports` 的话，若将来出现「支持计价但数据随 payload 下发」的类型，
+              // 按钮会亮起却拉回一条根本不会被引用的价 —— `priceOf` 首行即
+              // `if (!supports(loc)) return null`，白烧配额且无任何报错。
+              //
+              // 本轮二者恒 false → 恒置灰；OTA 接入后只改 `requestKindFor` 一处即自动亮起。
+              enabled: widget.trip.allLocations
+                  .any((l) => _priceSource.supports(l) && _priceSource.needsNetwork(l)),
+              // 无可刷项时兜底常驻说明，避免用户以为功能坏了
+              status: _prices.refreshStatus.isNotEmpty
+                  ? _prices.refreshStatus
+                  : PreviewStrings.priceOfflineNote,
+              onRefresh: _refreshPrices,
+            ),
+            Expanded(
+              child: NotificationListener<ScrollNotification>(
+                onNotification: _onScroll,
+                child: ListView(
+                  key: _listKey,
+                  controller: _scrollController,
+                  padding: const EdgeInsets.fromLTRB(0, 0, 0, 96),
+                  children: [
+                    for (var i = 0; i < days.length; i++) _buildDaySection(i, days[i]),
+                    _buildTripCostFooter(days),
+                  ],
+                ),
+              ),
+            ),
+          ],
+        ),
       ),
       floatingActionButton: Column(
         mainAxisAlignment: MainAxisAlignment.end,
@@ -163,7 +349,185 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
             Navigator.push(context, MaterialPageRoute(builder: (_) => TripMapPage(trip: widget.trip)));
           }),
           const SizedBox(height: 12),
-          _fab(Icons.add, AppColors.green, _addLocationToDay),
+          _fab(Icons.add, PreviewColors.teal, _addLocationToDay),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDaySection(int index, TripDay day) {
+    final slots = _slots(day);
+    final isTripStartDay = day.dayNumber == 1;
+
+    final rows = <Widget>[];
+    for (var k = 0; k < slots.length; k++) {
+      final s = slots[k];
+      final loc = s.location;
+      rows.add(
+        TimelineRow(
+          timeText: _fmt(s.arrival),
+          dotColor: TimelineRow.dotColorOf(loc, isTripStart: isTripStartDay && k == 0),
+          child: LocationCard(
+            location: loc,
+            arrivalText: _fmt(s.arrival),
+            leaveText: _fmt(s.leave),
+            quote: _quoteOf(loc),
+            // 酒店/景点本轮无价格源 → 不渲染徽章（渲染出来必然是"暂无参考价"，是噪音）
+            showPrice: _priceSource.supports(loc),
+            conflict: _isConflict(loc, s),
+            onTap: () => _showLocationSheet(loc),
+            onOta: () => _openOta(loc),
+            onEditStay: () => _editStay(loc),
+            onRemove: () => _removeLocation(loc),
+            // 【TL-10 回归】旧版判据是「过滤掉自己之后还有候选」，不是「原始长度 > 1」。
+            // 当 hotelCandidates 里不含当前酒店时，旧版能换、新版会误判为不能换。
+            onSwitchHotel:
+                loc.type == LocationType.hotel &&
+                        (loc.hotelCandidates ?? const <Map<String, dynamic>>[])
+                            .where((c) => c['name'] != loc.name)
+                            .isNotEmpty
+                    ? () => _showHotelSwitch(loc)
+                    : null,
+          ),
+        ),
+      );
+      rows.add(const SizedBox(height: 7));
+    }
+
+    return Column(
+      key: _anchor.keys[index],
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        DayGroupHeader(
+          day: day,
+          weather: _weather.peek(day),
+          weatherLoading: _weather.isPending(day),
+        ),
+        if (slots.isEmpty)
+          _buildEmptyDay()
+        else
+          TimelineBlock(rows: rows),
+        DayCostBar(cost: _costOf(day)),
+      ],
+    );
+  }
+
+  /// 行程级费用出口：
+  /// - 有 `stats.cost` → 独立小卡（items + total + note + 口径冲突说明）【裁 2】
+  /// - 无 → 全行程"可归集合计"（仅卡片可归集价格），明写未含油电过路
+  Widget _buildTripCostFooter(List<TripDay> days) {
+    final stats = widget.trip.statsCost;
+    if (stats != null) return _buildStatsCostCard(stats);
+
+    var low = 0;
+    var high = 0;
+    var missing = 0;
+    for (final d in days) {
+      final c = _costOf(d);
+      low += c.low;
+      high += c.high;
+      missing += c.missingCount;
+    }
+    final amount = (low == 0 && high == 0)
+        ? PreviewStrings.dayCostEmpty
+        : (low == high
+            ? '¥${CostAggregator.fmtAmount(low)}'
+            : '¥${CostAggregator.fmtAmount(low)}–${CostAggregator.fmtAmount(high)}');
+
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: PreviewColors.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: PreviewColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_balance_wallet_outlined, size: 16, color: PreviewColors.green2),
+              const SizedBox(width: 6),
+              const Text('全行程已计价', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PreviewColors.ink)),
+              const Spacer(),
+              Text(amount, style: PreviewText.costNum),
+            ],
+          ),
+          const SizedBox(height: 6),
+          Text(
+            '${PreviewStrings.priceScope}${missing > 0 ? ' · $missing 项未取到价' : ''}',
+            style: PreviewText.costLabel,
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// 【裁 2 / M6】`stats.cost` 与「当日已计价」**并列**展示，卡面明写口径不同、不可相加
+  Widget _buildStatsCostCard(TripCost stats) {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 4, 12, 12),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: PreviewColors.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: PreviewColors.line),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.account_balance_wallet_outlined, size: 16, color: PreviewColors.green2),
+              const SizedBox(width: 6),
+              const Text('费用预估（服务端口径）',
+                  style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PreviewColors.ink)),
+              const Spacer(),
+              Text('¥${CostAggregator.fmtAmount(stats.total)}', style: PreviewText.costNum),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 10,
+            runSpacing: 4,
+            children: stats.sortedItems
+                .map((e) => Text('${e.key} ¥${CostAggregator.fmtAmount(e.value)}', style: PreviewText.costLabel))
+                .toList(),
+          ),
+          if (stats.note != null && stats.note!.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Text(stats.note!, style: PreviewText.costLabel),
+          ],
+          const SizedBox(height: 6),
+          Text(TripCost.scopeConflictNote,
+              style: const TextStyle(fontSize: 11, color: PreviewColors.priceRedText)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildEmptyDay() {
+    return Container(
+      margin: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+      padding: const EdgeInsets.symmetric(vertical: 28),
+      decoration: BoxDecoration(
+        color: PreviewColors.cardBg,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: PreviewColors.line),
+      ),
+      child: Column(
+        children: [
+          Icon(Icons.calendar_month_outlined, size: 36, color: PreviewColors.dim),
+          const SizedBox(height: 8),
+          const Text('这一天还没有安排', style: TextStyle(fontSize: 13, color: PreviewColors.sub)),
+          const SizedBox(height: 10),
+          TextButton.icon(
+            onPressed: _addLocationToDay,
+            icon: const Icon(Icons.add, size: 16),
+            label: const Text('添加地点'),
+            style: TextButton.styleFrom(foregroundColor: PreviewColors.green2),
+          ),
         ],
       ),
     );
@@ -185,437 +549,136 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
     );
   }
 
-  // ---------- 顶部信息卡 + 天数选择 ----------
-  Widget _buildMetaCard(List<TripDay> days) {
-    final trip = widget.trip;
-    return Container(
-      margin: const EdgeInsets.fromLTRB(16, 12, 16, 4),
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.cardShadow,
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              const Text('出发日期', style: TextStyle(fontSize: 12, color: AppColors.textSub)),
-              const SizedBox(width: 10),
-              Text(
-                DateFormat('yyyy-MM-dd').format(trip.startDate),
-                style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600, color: AppColors.textPrimary),
-              ),
-              const Spacer(),
-              const Text('出行人', style: TextStyle(fontSize: 12, color: AppColors.textSub)),
-              const SizedBox(width: 6),
-              if (trip.members.isEmpty)
-                Container(
-                  width: 26,
-                  height: 26,
-                  decoration: BoxDecoration(color: AppColors.mintCircle, shape: BoxShape.circle),
-                  child: const Center(child: Text('🧳', style: TextStyle(fontSize: 13))),
-                )
-              else
-                ...trip.members.take(4).map((m) => Container(
-                      width: 26,
-                      height: 26,
-                      margin: const EdgeInsets.only(left: 2),
-                      decoration: BoxDecoration(color: AppColors.sky, shape: BoxShape.circle),
-                      child: Center(
-                        child: Text(
-                          m.name.isNotEmpty ? m.name[0] : '👤',
-                          style: const TextStyle(fontSize: 12, color: AppColors.textPrimary),
-                        ),
-                      ),
-                    )),
-            ],
-          ),
-          const SizedBox(height: 14),
-          SizedBox(
-            height: 56,
-            child: ListView.separated(
-              scrollDirection: Axis.horizontal,
-              itemCount: days.length,
-              separatorBuilder: (_, __) => const SizedBox(width: 10),
-              itemBuilder: (context, i) {
-                final selected = i == _selectedDayIndex;
-                final d = days[i];
-                return GestureDetector(
-                  onTap: () => setState(() => _selectedDayIndex = i),
-                  child: Container(
-                    width: 52,
-                    decoration: BoxDecoration(
-                      color: selected ? AppColors.green : AppColors.mintBg,
-                      borderRadius: BorderRadius.circular(14),
-                      border: selected ? null : Border.all(color: const Color(0xFFE3EDE2)),
-                    ),
-                    child: Column(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Text(
-                          '${d.dayNumber}',
-                          style: TextStyle(
-                            fontSize: 17,
-                            fontWeight: FontWeight.bold,
-                            color: selected ? Colors.white : AppColors.textPrimary,
-                          ),
-                        ),
-                        Text(
-                          '${d.date.month}/${d.date.day}',
-                          style: TextStyle(
-                            fontSize: 10,
-                            color: selected ? Colors.white70 : AppColors.textSub,
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                );
-              },
-            ),
-          ),
-        ],
-      ),
-    );
+  // ---------------- 业务动作 ----------------
+
+  Future<void> _refreshPrices() async {
+    await _prices.refreshTrip(widget.trip);
   }
 
-  Widget _buildDayStrip(TripDay day) {
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-      decoration: BoxDecoration(
-        color: AppColors.mintCircle,
-        borderRadius: BorderRadius.circular(10),
-      ),
-      child: Row(
-        children: [
-          Text(
-            '${day.date.year}.${day.date.month.toString().padLeft(2, '0')}.${day.date.day.toString().padLeft(2, '0')}',
-            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: AppColors.greenDark),
-          ),
-          const SizedBox(width: 10),
-          Text(
-            _weekdays[day.date.weekday - 1],
-            style: const TextStyle(fontSize: 12, color: AppColors.greenDark),
-          ),
-          const Spacer(),
-          Text(
-            '${day.locations.length}个地点',
-            style: const TextStyle(fontSize: 11, color: AppColors.textSub),
-          ),
-        ],
-      ),
+  void _onInvite() {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text(PreviewStrings.inviteTodo)),
     );
+    _showPosterSheet();
   }
 
-  Widget _buildEmptyDay() {
-    return Container(
-      padding: const EdgeInsets.symmetric(vertical: 40),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.cardShadow,
-      ),
-      child: Column(
-        children: [
-          Icon(Icons.calendar_month_outlined, size: 40, color: Colors.grey[300]),
-          const SizedBox(height: 10),
-          const Text('这一天还没有安排', style: TextStyle(fontSize: 14, color: AppColors.textSub)),
-          const SizedBox(height: 14),
-          TextButton.icon(
-            onPressed: _addLocationToDay,
-            icon: const Icon(Icons.add, size: 18),
-            label: const Text('添加地点'),
-            style: TextButton.styleFrom(foregroundColor: AppColors.greenDark),
-          ),
-        ],
-      ),
-    );
+  void _openEdit() {
+    context.read<TripProvider>().setCurrentTrip(widget.trip);
+    Navigator.push(context, MaterialPageRoute(builder: (_) => TripCreatePage(trip: widget.trip)));
   }
 
-  // ---------- 时间轴条目 ----------
-  Widget _buildTimelineEntry(_Slot slot, bool isLast) {
-    final loc = slot.location;
-    final grad = _gradient(loc.type);
-    final dotColor = grad.colors.first;
-
-    return IntrinsicHeight(
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          // 时间列
-          SizedBox(
-            width: 42,
-            child: Padding(
-              padding: const EdgeInsets.only(top: 2),
-              child: Text(
-                _fmt(slot.arrival),
-                textAlign: TextAlign.right,
-                style: const TextStyle(fontSize: 12, fontWeight: FontWeight.w600, color: AppColors.textSub),
-              ),
-            ),
-          ),
-          const SizedBox(width: 10),
-          // 节点 + 竖线
-          Column(
-            children: [
-              Container(
-                width: 11,
-                height: 11,
-                margin: const EdgeInsets.only(top: 4),
-                decoration: BoxDecoration(
-                  color: dotColor,
-                  shape: BoxShape.circle,
-                  border: Border.all(color: Colors.white, width: 2),
-                  boxShadow: [BoxShadow(color: dotColor.withOpacity(0.4), blurRadius: 4)],
-                ),
-              ),
-              if (!isLast)
-                Expanded(
-                  child: Container(width: 2, color: const Color(0xFFDCE8DC)),
-                ),
-            ],
-          ),
-          const SizedBox(width: 12),
-          // 卡片列
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: [
-                if (slot.travelMinutes != null || loc.transport != null) _buildTransportRow(loc, slot.travelMinutes),
-                _buildLocationCard(loc, slot, grad),
-                _buildStayRow(loc, slot),
-                SizedBox(height: isLast ? 0 : 14),
-              ],
-            ),
-          ),
-        ],
-      ),
-    );
+  Future<void> _saveTrip() async {
+    final provider = context.read<TripProvider>();
+    await provider.updateTrip(widget.trip);
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('行程已保存')));
   }
 
-  Widget _buildTransportRow(Location loc, int? travelMinutes) {
-    IconData icon;
-    String title;
-    String sub;
-    final t = loc.transport;
-    if (t != null) {
-      switch (t.type) {
-        case TransportType.flight:
-          icon = Icons.flight_takeoff_rounded;
-          break;
-        case TransportType.highSpeedTrain:
-        case TransportType.train:
-          icon = Icons.train_rounded;
-          break;
-        case TransportType.ship:
-          icon = Icons.directions_boat_rounded;
-          break;
-        default:
-          icon = Icons.directions_bus_rounded;
-      }
-      title = t.flightNumber ?? t.displayName.replaceAll(RegExp(r'[^\u4e00-\u9fa5A-Za-z0-9]'), '');
-      sub = [
-        if (t.departureTime != null && t.arrivalTime != null) '${t.departureTime} → ${t.arrivalTime}',
-        if (t.durationMinutes != null) _dur(t.durationMinutes!),
-        if (t.distance != null) '${(t.distance! / 1000).toStringAsFixed(0)}公里',
-      ].join(' · ');
-      if (sub.isEmpty) sub = t.displayName;
-    } else {
-      final mins = travelMinutes ?? 0;
-      final walk = mins <= 25;
-      icon = walk ? Icons.directions_walk_rounded : Icons.directions_transit_rounded;
-      title = walk ? '步行' : '公共交通';
-      sub = '约${_dur(mins)}到达';
-    }
-    return Container(
-      margin: const EdgeInsets.only(bottom: 8),
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      decoration: BoxDecoration(
-        color: const Color(0xFFF3F6F3),
-        borderRadius: BorderRadius.circular(12),
-      ),
-      child: Row(
-        children: [
-          Container(
-            width: 30,
-            height: 30,
-            decoration: BoxDecoration(color: Colors.white, borderRadius: BorderRadius.circular(9)),
-            child: Icon(icon, size: 17, color: AppColors.textSub),
-          ),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(title, style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: AppColors.textPrimary)),
-                if (sub.isNotEmpty)
-                  Text(sub, style: const TextStyle(fontSize: 11, color: AppColors.textSub)),
-              ],
-            ),
-          ),
-          const Icon(Icons.chevron_right, size: 18, color: Color(0xFFC4D2C4)),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildLocationCard(Location loc, _Slot slot, LinearGradient grad) {
-    final temp = _dayTemp[_selectedDayIndex];
-    return GestureDetector(
-      onTap: () => _showLocationSheet(loc),
-      child: Container(
-        padding: const EdgeInsets.fromLTRB(12, 12, 12, 12),
-        decoration: BoxDecoration(
-          gradient: grad,
-          borderRadius: BorderRadius.circular(14),
-          boxShadow: [BoxShadow(color: grad.colors.last.withOpacity(0.3), blurRadius: 8, offset: const Offset(0, 3))],
-        ),
-        child: Row(
-          children: [
-            Container(
-              width: 34,
-              height: 34,
-              decoration: BoxDecoration(
-                color: Colors.white.withOpacity(0.22),
-                borderRadius: BorderRadius.circular(10),
-              ),
-              child: Icon(_typeIcon(loc.type), color: Colors.white, size: 18),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(
-                    loc.name,
-                    style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    loc.address,
-                    style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.85)),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ],
-              ),
-            ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: [
-                if (temp != null)
-                  Text('$temp°C', style: const TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: Colors.white))
-                else
-                  Text('--°', style: TextStyle(fontSize: 13, color: Colors.white.withOpacity(0.7))),
-                const SizedBox(height: 2),
-                Text(
-                  '${_fmt(slot.arrival)}到达',
-                  style: TextStyle(fontSize: 10, color: Colors.white.withOpacity(0.85)),
-                ),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildStayRow(Location loc, _Slot slot) {
-    final stay = loc.stayMinutes;
-    if (stay == null || stay <= 0) return const SizedBox(height: 6);
-    final open = (loc.openTime != null && loc.closeTime != null) ? ' · 营业 ${loc.openTime}-${loc.closeTime}' : '';
-    return Padding(
-      padding: const EdgeInsets.only(top: 6, right: 4),
-      child: Row(
-        mainAxisAlignment: MainAxisAlignment.end,
-        children: [
-          const Icon(Icons.schedule, size: 12, color: Color(0xFFFF9F43)),
-          const SizedBox(width: 4),
-          Text(
-            '停留时间：${_dur(stay)}$open',
-            style: const TextStyle(fontSize: 11, color: Color(0xFFE58E26)),
-          ),
-        ],
-      ),
-    );
-  }
-
-  // ---------- 费用卡 ----------
-  Widget _buildCostCard() {
-    return Container(
-      padding: const EdgeInsets.all(16),
-      decoration: BoxDecoration(
-        color: Colors.white,
-        borderRadius: BorderRadius.circular(AppColors.cardRadius),
-        boxShadow: AppColors.cardShadow,
-      ),
-      child: Column(
-        children: [
-          Row(
-            children: [
-              const Icon(Icons.account_balance_wallet_outlined, size: 18, color: AppColors.greenDark),
-              const SizedBox(width: 6),
-              const Text('费用预估', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-              const Spacer(),
-              Text(
-                '¥${_calculateTotalCost()}',
-                style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold, color: Color(0xFFFF6600)),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceAround,
-            children: [
-              _costItem('交通', '¥${_calculateTransportCost()}'),
-              _costItem('住宿', '¥${_calculateHotelCost()}'),
-              _costItem('餐饮', '¥${_calculateFoodCost()}'),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _costItem(String label, String value) {
-    return Column(
-      children: [
-        Text(value, style: const TextStyle(fontSize: 15, fontWeight: FontWeight.w600, color: Color(0xFFFF6600))),
-        const SizedBox(height: 2),
-        Text(label, style: const TextStyle(fontSize: 12, color: AppColors.textSub)),
-      ],
-    );
-  }
-
-  // ---------- 交互 ----------
   Future<void> _addLocationToDay() async {
     final result = await Navigator.push<Location>(
       context,
       MaterialPageRoute(builder: (_) => const LocationSearchPage()),
     );
     if (result == null || !mounted) return;
-    final trip = widget.trip;
-    final days = List<TripDay>.from(trip.days);
-    final i = _selectedDayIndex;
+    final days = _days;
+    final i = _activeDayIndex;
     if (i >= days.length) return;
     final day = days[i];
     final locations = List<Location>.from(day.locations)..add(result);
     days[i] = TripDay(id: day.id, date: day.date, dayNumber: day.dayNumber, locations: locations);
-    trip.days = days;
-    await context.read<TripProvider>().updateTrip(trip);
+    _persistDays(days); // FX-04：编辑即写回校正日期
+    await context.read<TripProvider>().updateTrip(widget.trip);
     if (!mounted) return;
-    setState(() {});
+    setState(() => _anchor.markDirty());
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text('已添加「${result.name}」到第${day.dayNumber}天')),
     );
   }
 
-  void _showLocationSheet(Location loc) {
-    final isHotel = loc.type == LocationType.hotel;
+  Future<void> _removeLocation(Location loc) async {
+    final days = _days;
+    final i = _activeDayIndex;
+    if (i >= days.length) return;
+    final day = days[i];
+    if (loc.fixed) {
+      // 【裁 4】必去点保护由客户端维护
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('「${loc.name}」是必去点，不能移除')),
+      );
+      return;
+    }
+    final locations = List<Location>.from(day.locations)..removeWhere((l) => l.id == loc.id);
+    days[i] = TripDay(id: day.id, date: day.date, dayNumber: day.dayNumber, locations: locations);
+    _persistDays(days);
+    await context.read<TripProvider>().updateTrip(widget.trip);
+    if (!mounted) return;
+    setState(() => _anchor.markDirty());
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已移除「${loc.name}」')));
+  }
+
+  void _editStay(Location loc) {
+    const options = [30, 60, 90, 120, 150, 180, 240];
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(20),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text('停留时长', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: PreviewColors.ink)),
+              const SizedBox(height: 14),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: options.map((m) {
+                  final selected = loc.stayMinutes == m;
+                  return ChoiceChip(
+                    label: Text(_dur(m)),
+                    selected: selected,
+                    onSelected: (_) async {
+                      Navigator.pop(ctx);
+                      loc.stayMinutes = m;
+                      final days = _days;
+                      _persistDays(days);
+                      await context.read<TripProvider>().updateTrip(widget.trip);
+                      if (mounted) setState(() => _anchor.markDirty());
+                    },
+                    selectedColor: PreviewColors.priceGreenBg,
+                    labelStyle: TextStyle(
+                      fontSize: 13,
+                      color: selected ? PreviewColors.green2 : PreviewColors.ink,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
+                    ),
+                  );
+                }).toList(),
+              ),
+              const SizedBox(height: 10),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<void> _switchHotel(Location loc, Map<String, dynamic> cand) async {
+    loc.name = cand['name']?.toString() ?? loc.name;
+    loc.address = cand['address']?.toString() ?? loc.address;
+    loc.latitude = (cand['latitude'] as num?)?.toDouble() ?? loc.latitude;
+    loc.longitude = (cand['longitude'] as num?)?.toDouble() ?? loc.longitude;
+    loc.cost = cand['cost']?.toString() ?? loc.cost;
+    _persistDays(_days);
+    await context.read<TripProvider>().updateTrip(widget.trip);
+    if (!mounted) return;
+    setState(() => _anchor.markDirty());
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('已切换酒店，次日出发交通时长可重新编辑校准')),
+    );
+  }
+
+  void _showHotelSwitch(Location loc) {
     final cands = (loc.hotelCandidates ?? []).where((c) => c['name'] != loc.name).toList();
     showModalBottomSheet(
       context: context,
@@ -626,66 +689,87 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           children: [
             Padding(
               padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
-              child: Text(loc.name, style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+              child: Text('换一家（AI 已按位置/口碑/星级/预算筛过）',
+                  style: TextStyle(fontSize: 12, color: PreviewColors.sub)),
             ),
-            if (isHotel && cands.isNotEmpty) ...[
-              const Padding(
-                padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
+            ...cands.map((c) => ListTile(
+                  dense: true,
+                  leading: const Icon(Icons.hotel_rounded, size: 20, color: PreviewColors.green2),
+                  title: Text(c['name']?.toString() ?? '', style: const TextStyle(fontSize: 14)),
+                  subtitle: Text(c['reason']?.toString() ?? '', style: PreviewText.cardMeta),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    _switchHotel(loc, c);
+                  },
+                )),
+            const SizedBox(height: 8),
+          ],
+        ),
+      ),
+    );
+  }
+
+  void _showLocationSheet(Location loc) {
+    showModalBottomSheet(
+      context: context,
+      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+      builder: (ctx) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+              child: Text(loc.name,
+                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.bold, color: PreviewColors.ink)),
+            ),
+            if (loc.stayNote != null && loc.stayNote!.isNotEmpty)
+              Padding(
+                padding: const EdgeInsets.fromLTRB(20, 0, 20, 4),
                 child: Align(
                   alignment: Alignment.centerLeft,
-                  child: Text('换一家（AI 已按位置/口碑/星级/预算筛过）', style: TextStyle(fontSize: 12, color: AppColors.textSub)),
+                  child: Text(loc.stayNote!, style: PreviewText.cardMeta),
                 ),
               ),
-              ...cands.map((c) => ListTile(
-                    dense: true,
-                    leading: const Icon(Icons.hotel_rounded, size: 20, color: AppColors.greenDark),
-                    title: Text(c['name']?.toString() ?? '', style: const TextStyle(fontSize: 14)),
-                    subtitle: Text(c['reason']?.toString() ?? '', style: const TextStyle(fontSize: 11, color: AppColors.textSub)),
-                    onTap: () {
-                      Navigator.pop(ctx);
-                      _switchHotel(loc, c);
-                    },
-                  )),
-              const Divider(height: 1, indent: 20, endIndent: 20),
-            ],
-            // OTA 深链：房型/实时价/装修年份在预订页核实（联盟 key 到位后升级为库内数据）
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 8, 20, 4),
               child: Align(
                 alignment: Alignment.centerLeft,
-                child: Text('查看房型与实时价（跳转第三方）', style: TextStyle(fontSize: 12, color: AppColors.textSub)),
+                child: Text('查看房型与价格（跳转第三方）', style: PreviewText.cardMeta),
               ),
             ),
             ListTile(
               dense: true,
               leading: const Icon(Icons.map_rounded, size: 20, color: Color(0xFF4CA84A)),
-              title: const Text('高德·详情与预订入口', style: TextStyle(fontSize: 14)),
+              title: const Text('高德·详情与导航', style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
-                _openExternal('https://uri.amap.com/search?keyword=${Uri.encodeQueryComponent(loc.name)}');
+                _openExternal(OtaDeepLink.build(loc, OtaDeepLink.nav));
               },
             ),
             ListTile(
               dense: true,
               leading: const Icon(Icons.flight_takeoff_rounded, size: 20, color: Color(0xFF2E7D9C)),
-              title: const Text('携程·查房型与价格', style: TextStyle(fontSize: 14)),
+              title: Text('携程·${OtaDeepLink.buttonText(OtaDeepLink.purposeOf(loc))}',
+                  style: const TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
-                _openExternal('https://m.ctrip.com/webapp/search/?keyword=${Uri.encodeQueryComponent(loc.name)}');
+                _openOta(loc);
               },
             ),
+            // 【TL-10 回归】旧版此处有「美团·比价」，重写时丢失，补回。
+            // 用途固定传 meituan（不按地点类型推导）：任何地点都能比价。
             ListTile(
               dense: true,
               leading: const Icon(Icons.storefront_rounded, size: 20, color: Color(0xFFE58E26)),
               title: const Text('美团·比价', style: TextStyle(fontSize: 14)),
               onTap: () {
                 Navigator.pop(ctx);
-                _openExternal('https://www.meituan.com/s/${Uri.encodeComponent(loc.name)}');
+                _openOtaWith(loc, OtaDeepLink.meituan);
               },
             ),
             const Divider(height: 1, indent: 20, endIndent: 20),
             ListTile(
-              leading: const Icon(Icons.timelapse_outlined, color: AppColors.greenDark),
+              leading: const Icon(Icons.timelapse_outlined, color: PreviewColors.green2),
               title: const Text('调整停留时长'),
               onTap: () {
                 Navigator.pop(ctx);
@@ -717,12 +801,13 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           children: [
             const Padding(
               padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
-              child: Text('生成行程海报', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
+              child: Text('生成行程海报',
+                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: PreviewColors.ink)),
             ),
             ListTile(
               leading: const Icon(Icons.satellite_alt_rounded, size: 22, color: Color(0xFF5B9BD5)),
               title: const Text('卫星路线图', style: TextStyle(fontSize: 14)),
-              subtitle: const Text('卫星底图 + 真实路线，硬核风', style: TextStyle(fontSize: 11, color: AppColors.textSub)),
+              subtitle: const Text('卫星底图 + 真实路线，硬核风', style: PreviewText.cardMeta),
               onTap: () {
                 Navigator.pop(ctx);
                 Navigator.push(context, MaterialPageRoute(builder: (_) => RoutePosterPage(trip: widget.trip)));
@@ -731,7 +816,7 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
             ListTile(
               leading: const Icon(Icons.map_rounded, size: 22, color: Color(0xFFC9A227)),
               title: const Text('手绘示意图（游戏风）', style: TextStyle(fontSize: 14)),
-              subtitle: const Text('羊皮纸底图 + 贴纸点位 + 山水标注', style: TextStyle(fontSize: 11, color: AppColors.textSub)),
+              subtitle: const Text('羊皮纸底图 + 贴纸点位 + 山水标注', style: PreviewText.cardMeta),
               onTap: () {
                 Navigator.pop(ctx);
                 Navigator.push(context, MaterialPageRoute(builder: (_) => SchematicMapPage(trip: widget.trip)));
@@ -744,150 +829,40 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
     );
   }
 
+  /// 花钱类 OTA 跳转：二次确认（三铁律第 3 条）
+  Future<void> _openOta(Location loc) => _openOtaWith(loc, OtaDeepLink.purposeOf(loc));
+
+  /// 指定用途的 OTA 跳转（【TL-10】美团比价等固定渠道入口走这里）
+  Future<void> _openOtaWith(Location loc, String purpose) async {
+    final url = OtaDeepLink.build(loc, purpose);
+    if (!OtaDeepLink.needsConfirm(purpose)) {
+      await _openExternal(url);
+      return;
+    }
+    if (!mounted) return;
+    final go = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text(OtaDeepLink.confirmTitle(purpose)),
+        content: Text(OtaDeepLink.confirmText(loc, purpose)),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('取消')),
+          TextButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('继续')),
+        ],
+      ),
+    );
+    if (go != true) return;
+    await _openExternal(url);
+  }
+
   Future<void> _openExternal(String url) async {
     try {
       await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
     } catch (_) {
+      if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('未能打开链接，可复制地点名称到对应 App 搜索')),
       );
     }
   }
-
-  Future<void> _switchHotel(Location loc, Map<String, dynamic> cand) async {
-    loc.name = cand['name']?.toString() ?? loc.name;
-    loc.address = cand['address']?.toString() ?? loc.address;
-    loc.latitude = (cand['latitude'] as num?)?.toDouble() ?? loc.latitude;
-    loc.longitude = (cand['longitude'] as num?)?.toDouble() ?? loc.longitude;
-    await context.read<TripProvider>().updateTrip(widget.trip);
-    if (!mounted) return;
-    setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('已切换酒店，次日出发交通时长可重新编辑校准')),
-    );
-  }
-
-  void _editStay(Location loc) {
-    final options = [30, 60, 90, 120, 150, 180, 240];
-    showModalBottomSheet(
-      context: context,
-      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-      builder: (ctx) => SafeArea(
-        child: Padding(
-          padding: const EdgeInsets.all(20),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              const Text('停留时长', style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-              const SizedBox(height: 14),
-              Wrap(
-                spacing: 10,
-                runSpacing: 10,
-                children: options.map((m) {
-                  final selected = loc.stayMinutes == m;
-                  return ChoiceChip(
-                    label: Text(_dur(m)),
-                    selected: selected,
-                    onSelected: (_) async {
-                      Navigator.pop(ctx);
-                      loc.stayMinutes = m;
-                      await context.read<TripProvider>().updateTrip(widget.trip);
-                      if (mounted) setState(() {});
-                    },
-                    selectedColor: AppColors.mintCircle,
-                    labelStyle: TextStyle(
-                      fontSize: 13,
-                      color: selected ? AppColors.greenDark : AppColors.textPrimary,
-                      fontWeight: selected ? FontWeight.w600 : FontWeight.normal,
-                    ),
-                  );
-                }).toList(),
-              ),
-              const SizedBox(height: 10),
-            ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Future<void> _removeLocation(Location loc) async {
-    final trip = widget.trip;
-    final days = List<TripDay>.from(trip.days);
-    final i = _selectedDayIndex;
-    if (i >= days.length) return;
-    final day = days[i];
-    final locations = List<Location>.from(day.locations)..removeWhere((l) => l.id == loc.id);
-    days[i] = TripDay(id: day.id, date: day.date, dayNumber: day.dayNumber, locations: locations);
-    trip.days = days;
-    await context.read<TripProvider>().updateTrip(trip);
-    if (!mounted) return;
-    setState(() {});
-    ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已移除「${loc.name}」')));
-  }
-
-  // ---------- 视觉映射 ----------
-  LinearGradient _gradient(LocationType type) {
-    switch (type) {
-      case LocationType.hotel:
-        return const LinearGradient(colors: [Color(0xFF6ECB63), Color(0xFF3FA34D)]);
-      case LocationType.attraction:
-        return const LinearGradient(colors: [Color(0xFFA29BFE), Color(0xFF7C6FF0)]);
-      case LocationType.restaurant:
-        return const LinearGradient(colors: [Color(0xFFFFB26B), Color(0xFFFA8A4F)]);
-      case LocationType.shopping:
-        return const LinearGradient(colors: [Color(0xFFFF8FA3), Color(0xFFF5576C)]);
-      case LocationType.transport:
-        return const LinearGradient(colors: [Color(0xFFB0BEC5), Color(0xFF8FA3AD)]);
-      case LocationType.home:
-        return const LinearGradient(colors: [Color(0xFF4DD0E1), Color(0xFF26B8CA)]);
-      default:
-        return const LinearGradient(colors: [Color(0xFF90A8B8), Color(0xFF78909C)]);
-    }
-  }
-
-  IconData _typeIcon(LocationType type) {
-    switch (type) {
-      case LocationType.hotel:
-        return Icons.hotel_rounded;
-      case LocationType.attraction:
-        return Icons.attractions_rounded;
-      case LocationType.restaurant:
-        return Icons.restaurant_rounded;
-      case LocationType.shopping:
-        return Icons.shopping_bag_rounded;
-      case LocationType.transport:
-        return Icons.directions_bus_rounded;
-      case LocationType.home:
-        return Icons.home_rounded;
-      default:
-        return Icons.place_rounded;
-    }
-  }
-
-  int _calculateTransportCost() {
-    int cost = 0;
-    for (var loc in widget.trip.allLocations) {
-      if (loc.transport != null) {
-        if (loc.transport!.type == TransportType.flight) {
-          cost += 800;
-        } else if (loc.transport!.type == TransportType.highSpeedTrain) {
-          cost += 400;
-        } else {
-          cost += 200;
-        }
-      }
-    }
-    return cost;
-  }
-
-  int _calculateHotelCost() {
-    final nights = widget.trip.totalDays > 0 ? widget.trip.totalDays - 1 : 0;
-    return nights * 400;
-  }
-
-  int _calculateFoodCost() => widget.trip.totalDays * 100;
-
-  int _calculateTotalCost() => _calculateTransportCost() + _calculateHotelCost() + _calculateFoodCost();
 }

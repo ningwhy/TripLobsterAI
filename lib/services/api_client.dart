@@ -17,6 +17,12 @@ class ApiException implements Exception {
 class ApiClient {
   static const Duration _timeout = Duration(seconds: 20);
   static const Duration _longTimeout = Duration(seconds: 60); // AI 生成
+  /// 价格查询超时（具名常量，【裁 7】/ 设计 §8 A-3）：单次只发 1 次高德请求，60s 过长
+  static const Duration priceTimeout = Duration(seconds: 30);
+  /// 多城走廊规划超时（单次约百次高德调用）
+  static const Duration corridorTimeout = Duration(seconds: 60);
+  /// 天气默认超时（AI 生成的 20s 对单天天气太长）
+  static const Duration weatherTimeout = Duration(seconds: 8);
 
   static Future<String?> get token async {
     final prefs = await SharedPreferences.getInstance();
@@ -165,9 +171,35 @@ class ApiClient {
     return Map<String, dynamic>.from(data);
   }
 
-  // ---------- 天气（为 P0-3/P0-4 预留） ----------
-  static Future<Map<String, dynamic>> weather(double lat, double lon) async {
-    final data = await _request('GET', '/api/weather?lat=$lat&lon=$lon');
+  // ---------- 天气 ----------
+  static Future<Map<String, dynamic>> weather(
+    double lat,
+    double lon, {
+    Duration timeout = weatherTimeout,
+  }) async {
+    final data = await _request('GET', '/api/weather?lat=$lat&lon=$lon', timeout: timeout, retries: 0);
+    return Map<String, dynamic>.from(data);
+  }
+
+  // ---------- 参考价（高德 POI 静态参考价，非实时房价）----------
+  /// GET /api/planner/prices?city=&name=&kind=
+  ///
+  /// 【M9】首屏不主动调用；由用户点「🔄 刷新参考价」触发。
+  /// 【FX-06a 实测】酒店/景点的 `biz_ext.cost` 为空数组 → 返回的 reference 多为 null，
+  /// 属"数据源不可用"，UI 必须走「暂无参考价」降级，不得编造。
+  static Future<Map<String, dynamic>> lookupPrice({
+    required String city,
+    required String name,
+    String kind = 'hotel',
+  }) async {
+    final q = Uri.encodeQueryComponent(city);
+    final n = Uri.encodeQueryComponent(name);
+    final data = await _request(
+      'GET',
+      '/api/planner/prices?city=$q&name=$n&kind=$kind',
+      timeout: priceTimeout,
+      retries: 0,
+    );
     return Map<String, dynamic>.from(data);
   }
 

@@ -11,7 +11,6 @@ import 'package:path_provider/path_provider.dart';
 import 'package:share_plus/share_plus.dart';
 import '../models/trip_models.dart';
 import '../services/api_client.dart';
-import '../theme/app_colors.dart';
 
 /// 路线海报：行程地图模式（卫星底图 + 分日彩色路线 + 标注）→ 导出 PNG 分享
 class RoutePosterPage extends StatefulWidget {

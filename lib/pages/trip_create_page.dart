@@ -496,7 +496,6 @@ class _TripCreatePageState extends State<TripCreatePage> {
 
     // 检查是否需要显示交通信息（只要有交通信息就显示）
     final showTransport = index > 0 && location.transport != null;
-    final previousLocation = index > 0 ? _locations[index - 1] : null;
     // 简化：只要有交通信息就显示，不再严格判断跨城
     // 因为用户手动选择了交通方式，应该显示
 

@@ -125,6 +125,49 @@ class _AiPlanPageState extends State<AiPlanPage> {
     );
   }
 
+  /// 服务端 cost 可能是字符串（"300-500" / "544.00"）也可能是空数组（实测酒店/景点为 []）。
+  /// 空数组/非字符串 → null，避免把 "[]" 当成价格。
+  String? _costString(dynamic raw) {
+    if (raw is String) return raw.isEmpty ? null : raw;
+    if (raw is num) return raw.toString();
+    return null;
+  }
+
+  /// 必去点命中：按用户在"必去点"输入框里填的名称做包含匹配（客户端维护，不依赖服务端 _must）
+  bool _isMustVisit(String name) {
+    final keys = _mustController.text
+        .split(RegExp(r'[,，、;；\s]+'))
+        .map((s) => s.trim())
+        .where((s) => s.isNotEmpty)
+        .toList();
+    if (name.isEmpty || keys.isEmpty) return false;
+    return keys.any((k) => name.contains(k) || k.contains(name));
+  }
+
+  /// 交通段映射（服务端 planner.js toLocation / multiCity.js 产出）
+  Transport? _buildTransport(dynamic raw) {
+    if (raw is! Map) return null;
+    final t = Map<String, dynamic>.from(raw);
+    return Transport(
+      type: TransportType.values.firstWhere(
+        (e) => e.name == t['type'],
+        orElse: () => TransportType.other,
+      ),
+      scope: TransportScope.values.firstWhere(
+        (e) => e.name == t['scope'],
+        orElse: () => TransportScope.intraCity,
+      ),
+      flightNumber: t['flightNumber'] as String?,
+      departureTime: t['departureTime'] as String?,
+      arrivalTime: t['arrivalTime'] as String?,
+      durationMinutes: (t['durationMinutes'] as num?)?.round(),
+      distance: (t['distance'] as num?)?.toDouble(),
+      price: t['price'] as num?,
+      isFixed: t['isFixed'] as bool?,
+      estimated: t['estimated'] as bool?,
+    );
+  }
+
   Trip _buildTrip(Map<String, dynamic> result) {
     final tripData = Map<String, dynamic>.from(result['trip'] as Map);
     final now = DateTime.now();
@@ -154,6 +197,18 @@ class _AiPlanPageState extends State<AiPlanPage> {
             hotelCandidates: (loc['hotelCandidates'] as List?)
                 ?.map((e) => Map<String, dynamic>.from(e as Map))
                 .toList(),
+            // ---- T02 补映射：把服务端已产出的字段接进模型（缺则保持 null，不编造）----
+            // 注：generate 管线**不产出** arrivalTime/leaveTime（那是 corridor 管线的能力），
+            //     这两个字段在 AI 生成行程里恒为 null，预览页会回退 _slots() 推算 —— 预期行为。
+            arrivalTime: loc['arrivalTime'] as String?,
+            leaveTime: loc['leaveTime'] as String?,
+            rating: (loc['rating'] as num?)?.toDouble(),
+            stayNote: loc['stayNote'] as String?,
+            // 酒店参考价原串（高德 biz_ext.cost）；实测酒店/景点该字段为空数组 → 解析后为 null
+            cost: _costString(loc['cost']),
+            // 【裁 4】必去点由**客户端**按 mustVisit 名称命中，不读服务端 _must（经 buildDay 后恒 false）
+            fixed: _isMustVisit(loc['name']?.toString() ?? ''),
+            transport: _buildTransport(loc['transport']),
           );
         }).toList(),
       );

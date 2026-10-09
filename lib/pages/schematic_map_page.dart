@@ -72,7 +72,7 @@ class _SchematicMapPageState extends State<SchematicMapPage> {
       if (_cities.isNotEmpty) {
         try {
           final b = await ApiClient.geoBoundary(_cities);
-          data.polygons = ((b['polygons'] as List?) ?? []).cast<List>().map((e) => (e as List).cast<List<double>>().map((r) => (r as List).cast<double>()).toList()).toList();
+          data.polygons = ((b['polygons'] as List?) ?? []).cast<List>().map((e) => e.cast<List<double>>().map((r) => (r as List).cast<double>()).toList()).toList();
           data.labels = ((b['labels'] as List?) ?? []).map((e) => Map<String, dynamic>.from(e as Map)).toList();
         } catch (_) {}
       }
@@ -85,13 +85,8 @@ class _SchematicMapPageState extends State<SchematicMapPage> {
         } catch (_) {}
       }
       // bbox 含山水并外扩
-      for (final n in data.natures) {
-        final lng = (n['lng'] as num).toDouble(), lat = (n['lat'] as num).toDouble();
-        bbox = [
-          [bbox[0][0], bbox[0][1]],
-          [bbox[1][0], bbox[1][1]],
-        ];
-      }
+      // （原此处有一段把 bbox 重新赋成自身的死循环，已删除：它对结果无任何影响，
+      //   且声明了未使用的 lng/lat；真正的山水外扩由下面的 min/max 循环完成。）
       var minX = bbox[0][0], minY = bbox[0][1], maxX = bbox[1][0], maxY = bbox[1][1];
       for (final n in data.natures) {
         final lng = (n['lng'] as num).toDouble(), lat = (n['lat'] as num).toDouble();
@@ -184,7 +179,6 @@ class _SchPainter extends CustomPainter {
   static const _regionA = Color(0xFFF2E7C9);
   static const _regionB = Color(0xFFEBDCB4);
   static const _regionLine = Color(0xFFC4A870);
-  static const _ink = Color(0xFF5B4630);
 
   late double _minX, _minY, _maxX, _maxY;
   late Rect _area; // 绘图区
