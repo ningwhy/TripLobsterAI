@@ -1,5 +1,7 @@
 import 'package:uuid/uuid.dart';
 
+import 'trip_cost.dart';
+
 enum LocationType { home, hotel, attraction, restaurant, shopping, transport, other }
 // 六类语义映射：美食=restaurant 住宿=hotel 游玩=attraction 购物=shopping 枢纽=transport 其他=other；home=行程原点（不属于六类）
 
@@ -49,6 +51,13 @@ class Trip {
   DateTime createdAt;
   DateTime updatedAt;
 
+  /// @nonPersisted 运行时字段：**不进 toJson / 不落库 / 不云同步**。
+  ///
+  /// 对应服务端 `stats.cost`（它在 `stats` 下，不在 `trip` 下 —— 只解析 `trip` 的写法会静默丢弃它）。
+  /// 唯一取数点：`Trip.fromPlannerResponse()`，读 `json['stats']['cost']`（【裁 2】）。
+  /// 本次不接 /api/planner/corridor，故端上恒为 null；取数路径先定义好，接 corridor 时零改动。
+  TripCost? statsCost;
+
   Trip({
     String? id,
     required this.name,
@@ -65,6 +74,7 @@ class Trip {
     this.budget = 'comfort',
     DateTime? createdAt,
     DateTime? updatedAt,
+    this.statsCost,
   })  : id = id ?? const Uuid().v4(),
         createdAt = createdAt ?? DateTime.now(),
         updatedAt = updatedAt ?? DateTime.now();
@@ -93,23 +103,52 @@ class Trip {
     'updatedAt': updatedAt.toIso8601String(),
   };
 
-  factory Trip.fromJson(Map<String, dynamic> json) => Trip(
+  factory Trip.fromJson(Map<String, dynamic> json, {TripCost? statsCost}) => Trip(
     id: json['id'],
     name: json['name'],
     startDate: DateTime.parse(json['startDate']),
     endDate: DateTime.parse(json['endDate']),
-    days: (json['days'] as List).map((d) => TripDay.fromJson(d)).toList(),
+    days: (json['days'] as List? ?? const [])
+        .whereType<Map>()
+        .map((d) => TripDay.fromJson(Map<String, dynamic>.from(d)))
+        .toList(),
     homeLocation: json['homeLocation'] != null ? HomeLocation.fromJson(json['homeLocation']) : null,
-    members: (json['members'] as List).map((m) => Member.fromJson(m)).toList(),
+    members: (json['members'] as List? ?? const [])
+        .whereType<Map>()
+        .map((m) => Member.fromJson(Map<String, dynamic>.from(m)))
+        .toList(),
     tripMode: TripMode.values.firstWhere((e) => e.name == json['tripMode'], orElse: () => TripMode.pureTransit),
     adults: json['adults'] ?? 2,
     children: json['children'] ?? 0,
     rooms: json['rooms'] ?? 1,
     roomType: roomTypeFromName(json['roomType']),
     budget: json['budget'] ?? 'comfort',
-    createdAt: DateTime.parse(json['createdAt']),
-    updatedAt: DateTime.parse(json['updatedAt']),
+    // 向后兼容：规划接口响应 / 旧数据可能不带时间戳 → 取"现在"（构造器默认值）
+    createdAt: json['createdAt'] != null ? DateTime.parse(json['createdAt'] as String) : null,
+    updatedAt: json['updatedAt'] != null ? DateTime.parse(json['updatedAt'] as String) : null,
+    statsCost: statsCost,
   );
+
+  /// 规划接口（`generate` / `corridor`）完整响应 → Trip。
+  ///
+  /// 【裁 2】唯一取数点：`json['stats']['cost']` —— 它在 `stats` 下、不在 `trip` 下。
+  /// 缺失时为 null（本次恒为 null），**不估算、不兜底**。
+  factory Trip.fromPlannerResponse(Map<String, dynamic> json) {
+    final rawTrip = json['trip'];
+    final tripJson = rawTrip is Map
+        ? Map<String, dynamic>.from(rawTrip)
+        : <String, dynamic>{};
+
+    TripCost? cost;
+    final rawStats = json['stats'];
+    if (rawStats is Map) {
+      final rawCost = rawStats['cost'];
+      if (rawCost is Map) {
+        cost = TripCost.fromJson(Map<String, dynamic>.from(rawCost));
+      }
+    }
+    return Trip.fromJson(tripJson, statsCost: cost);
+  }
 }
 
 class TripDay {
@@ -151,7 +190,11 @@ class TripDay {
     id: json['id'],
     date: DateTime.parse(json['date']),
     dayNumber: json['dayNumber'],
-    locations: (json['locations'] as List).map((l) => Location.fromJson(l)).toList(),
+    // 向后兼容：旧数据缺 locations → 空列表，不抛异常
+    locations: (json['locations'] as List? ?? const [])
+        .whereType<Map>()
+        .map((l) => Location.fromJson(Map<String, dynamic>.from(l)))
+        .toList(),
   );
 }
 
@@ -176,6 +219,26 @@ class Location {
   /// 酒店三候选（仅 type==hotel 时有值）：name/address/latitude/longitude/rating/cost/reason
   List<Map<String, dynamic>>? hotelCandidates;
 
+  // ---- T02 新增（全部**进** toJson/fromJson，要云同步）----
+  /// 服务端时刻表到达时刻 `HH:mm`（planner.js toLocation）。为空 → UI 回退 `_slots()` 推算（FX-02 验收②）
+  String? arrivalTime;
+  /// 服务端时刻表离开时刻 `HH:mm`
+  String? leaveTime;
+  /// 高德评分（0 分服务端已置 null）
+  double? rating;
+  /// 服务端备注（如「连住」，multiCity.js:674）
+  String? stayNote;
+  /// 酒店/POI 参考价原串（高德 `biz_ext.cost`，如 `"300-500"`）。
+  ///
+  /// 【FX-06a 探针实测】酒店与景点该字段 **0/20 全空**（`cost: []`），
+  /// 服务端 `multiCity.js` 给 `hotelLoc` 补的 cost 同样取不到值（源头无数据）。
+  /// 故本字段当前**实际只在餐饮场景下可能非空**，且是否计价由 `PriceSource.supports()` 决定。
+  /// 解析与脏值过滤统一走 `PriceRange.fromAmapCost()`。
+  String? cost;
+  /// 必去点（**客户端维护**，进 toJson 随云同步走）。
+  /// 【裁 4】不读服务端 `_must`：它经 buildDay 后恒为 false、不可依赖。
+  bool fixed;
+
   Location({
     String? id,
     required this.name,
@@ -194,6 +257,12 @@ class Location {
     this.transport,
     this.photoIds = const [],
     this.hotelCandidates,
+    this.arrivalTime,
+    this.leaveTime,
+    this.rating,
+    this.stayNote,
+    this.cost,
+    this.fixed = false,
   }) : id = id ?? const Uuid().v4();
 
   /// 获取城市名称，优先使用POI返回的city，否则从address解析
@@ -239,6 +308,13 @@ class Location {
     'transport': transport?.toJson(),
     'photoIds': photoIds,
     'hotelCandidates': hotelCandidates,
+    // T02 新增：全部进 toJson（要云同步）
+    'arrivalTime': arrivalTime,
+    'leaveTime': leaveTime,
+    'rating': rating,
+    'stayNote': stayNote,
+    'cost': cost,
+    'fixed': fixed,
   };
 
   factory Location.fromJson(Map<String, dynamic> json) => Location(
@@ -261,6 +337,13 @@ class Location {
     hotelCandidates: (json['hotelCandidates'] as List?)
         ?.map((e) => Map<String, dynamic>.from(e as Map))
         .toList(),
+    // T02 新增：向后兼容 —— 旧数据缺字段一律取默认值，不抛异常
+    arrivalTime: json['arrivalTime'] as String?,
+    leaveTime: json['leaveTime'] as String?,
+    rating: (json['rating'] as num?)?.toDouble(),
+    stayNote: json['stayNote'] as String?,
+    cost: json['cost'] as String?,
+    fixed: json['fixed'] == true,
   );
 }
 
@@ -274,6 +357,15 @@ class Transport {
   int? durationMinutes;
   double? distance;
 
+  // ---- T02 新增（全部**进** toJson/fromJson，要云同步）----
+  /// 票价（真实班次才有；服务端估算分支恒 null —— planner.js:475 / multiCity.js:569,735）
+  num? price;
+  /// 是否为固定班次（corridor 产出；generate 管线恒 null）
+  bool? isFixed;
+  /// 是否为估算占位（corridor 产出；generate 管线恒 null）
+  /// 注：generate 管线不产出 isFixed/estimated（恒 null）→ UI 用 flightNumber 空值辅助判「估算占位」
+  bool? estimated;
+
   Transport({
     String? id,
     required this.type,
@@ -283,9 +375,18 @@ class Transport {
     this.arrivalTime,
     this.durationMinutes,
     this.distance,
+    this.price,
+    this.isFixed,
+    this.estimated,
   }) : id = id ?? const Uuid().v4();
 
   bool get isIntercity => scope == TransportScope.intercity;
+
+  /// 是否"真实班次"（有固定时刻锚）：UI 据此决定是否展示"班次固定"标识
+  bool get isScheduled => isFixed == true;
+
+  /// 是否"估算占位"（无真实班次）：UI 据此提示"时长为估算占位，班次以 12306/航司为准"
+  bool get isEstimate => estimated == true;
 
   String get displayName {
     switch (type) {
@@ -323,6 +424,10 @@ class Transport {
     'arrivalTime': arrivalTime,
     'durationMinutes': durationMinutes,
     'distance': distance,
+    // T02 新增：全部进 toJson（要云同步）
+    'price': price,
+    'isFixed': isFixed,
+    'estimated': estimated,
   };
 
   factory Transport.fromJson(Map<String, dynamic> json) => Transport(
@@ -334,6 +439,10 @@ class Transport {
     arrivalTime: json['arrivalTime'],
     durationMinutes: json['durationMinutes'],
     distance: json['distance']?.toDouble(),
+    // T02 新增：向后兼容 —— 旧数据缺字段为 null，不抛异常
+    price: json['price'] as num?,
+    isFixed: json['isFixed'] as bool?,
+    estimated: json['estimated'] as bool?,
   );
 }
 

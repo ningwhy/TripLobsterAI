@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:trip_planner/models/trip_models.dart';
+import 'package:trip_planner/models/trip_cost.dart';
 import 'package:trip_planner/utils/poi_classifier.dart';
 
 void main() {
@@ -119,6 +120,111 @@ void main() {
       final loc = Location(name: '虹桥机场', address: '上海', type: LocationType.transport, hubKind: 'airport');
       final r = Location.fromJson(loc.toJson());
       expect(r.hubKind, 'airport');
+    });
+  });
+
+  group('T02 新增字段（toJson/fromJson 往返 + 旧数据兼容）', () {
+    test('Location 新增字段往返一致', () {
+      final loc = Location(
+        name: '威海某酒店',
+        address: '威海市某路1号',
+        type: LocationType.hotel,
+        arrivalTime: '18:20',
+        leaveTime: '08:00',
+        rating: 4.6,
+        stayNote: '连住',
+        cost: '300-500',
+        fixed: true,
+      );
+      final r = Location.fromJson(loc.toJson());
+      expect(r.arrivalTime, '18:20');
+      expect(r.leaveTime, '08:00');
+      expect(r.rating, 4.6);
+      expect(r.stayNote, '连住');
+      expect(r.cost, '300-500');
+      expect(r.fixed, isTrue); // 【裁 4】fixed 进 toJson，云同步可带走
+    });
+
+    test('Location 旧数据缺字段不崩（向后兼容）', () {
+      final r = Location.fromJson(<String, dynamic>{
+        'name': '旧景点', 'address': '旧地址', 'type': 'attraction',
+      });
+      expect(r.arrivalTime, isNull);
+      expect(r.leaveTime, isNull);
+      expect(r.rating, isNull);
+      expect(r.stayNote, isNull);
+      expect(r.cost, isNull);
+      expect(r.fixed, isFalse);
+    });
+
+    test('Transport 新增字段往返一致', () {
+      final t = Transport(
+        type: TransportType.highSpeedTrain,
+        scope: TransportScope.intercity,
+        flightNumber: 'G123',
+        price: 268,
+        isFixed: true,
+        estimated: false,
+      );
+      final r = Transport.fromJson(t.toJson());
+      expect(r.price, 268);
+      expect(r.isFixed, isTrue);
+      expect(r.estimated, isFalse);
+      expect(r.isScheduled, isTrue);
+      expect(r.isEstimate, isFalse);
+    });
+
+    test('Transport 旧数据缺字段不崩（generate 管线恒 null）', () {
+      final r = Transport.fromJson(<String, dynamic>{
+        'type': 'selfDrive', 'scope': 'intraCity',
+      });
+      expect(r.price, isNull);
+      expect(r.isFixed, isNull);
+      expect(r.estimated, isNull);
+      expect(r.isScheduled, isFalse);
+      expect(r.isEstimate, isFalse);
+    });
+
+    test('Trip.fromPlannerResponse 从 stats.cost 取到值', () {
+      final trip = Trip.fromPlannerResponse(<String, dynamic>{
+        'trip': <String, dynamic>{
+          'name': '北京环线4日',
+          'startDate': '2026-10-01',
+          'endDate': '2026-10-04',
+          'days': <dynamic>[],
+        },
+        'stats': <String, dynamic>{
+          'cost': <String, dynamic>{
+            'currency': 'CNY',
+            'items': <String, dynamic>{'fuel': 180, 'toll': 135, 'bad': 'x'},
+            'total': 315,
+            'note': 'n',
+          },
+        },
+      });
+      expect(trip.statsCost, isNotNull);
+      expect(trip.statsCost!.total, 315);
+      expect(trip.statsCost!.items.containsKey('bad'), isFalse);
+    });
+
+    test('无 stats.cost → null（本次不接 corridor，端上恒 null）', () {
+      final trip = Trip.fromPlannerResponse(<String, dynamic>{
+        'trip': <String, dynamic>{
+          'name': 'x', 'startDate': '2026-10-01', 'endDate': '2026-10-02', 'days': <dynamic>[],
+        },
+      });
+      expect(trip.statsCost, isNull);
+    });
+
+    test('statsCost 是运行时字段：不进 toJson', () {
+      final trip = Trip(
+        name: 'x',
+        startDate: DateTime(2026, 10, 1),
+        endDate: DateTime(2026, 10, 2),
+        statsCost: const TripCost(total: 999),
+      );
+      expect(trip.statsCost!.total, 999);
+      expect(trip.toJson().containsKey('statsCost'), isFalse);
     });
   });
 
