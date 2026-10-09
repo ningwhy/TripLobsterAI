@@ -154,6 +154,18 @@ async function queryPois(city, q, pages = 2) {
   return out;
 }
 
+// 【SR-02】高德 `biz_ext.cost` 的两种形态必须归一：
+//   有值 → 字符串（餐饮实测 `"150.00"`，酒店历史口径 `"300-500"`）
+//   无值 → **空数组 `[]`**（FX-06a 探针实测酒店/景点 0/20 全空）
+// `[]` 在 JS 里是 **truthy**，直接透传会让下游 `if (h.cost)` 拼出悬空的「¥」（见 SR-04），
+// 也会让客户端拿到 `[]` 而不是 null。故统一归一为字符串或 null。
+function costOf(p) {
+  const c = p && p.biz_ext ? p.biz_ext.cost : undefined;
+  if (typeof c === 'number' && Number.isFinite(c)) return String(c);
+  if (typeof c === 'string' && c.trim() !== '') return c;
+  return null; // [] / undefined / '' / 其他类型一律归 null
+}
+
 function normalizePoi(p) {
   const [lng, lat] = String(p.location || '').split(',').map(Number);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
@@ -170,6 +182,8 @@ function normalizePoi(p) {
     openTime: open,
     closeTime: close,
     typeText: typeof p.type === 'string' ? p.type : '',
+    // 【SR-02】参考价原串透传（已归一：空数组 → null）
+    cost: costOf(p),
   };
 }
 
@@ -536,6 +550,21 @@ function parseCost(cost) {
   return { low: parseInt(m[1], 10), high: m[2] ? parseInt(m[2], 10) : parseInt(m[1], 10) };
 }
 
+// 【SR-04a 收敛】参考价的**展示文案唯一出口**。
+//
+// ⚠️ 任何"把 cost 显示给人看"的地方都**必须调本函数**，不要各自拼 `¥${cost}`：
+// `biz_ext.cost` 无值时是**空数组 `[]`**，在 JS 里 truthy —— 直接写
+// `if (cost) bits.push(\`¥${cost}\`)` 会拼出悬空的「¥」（本文件 :608 修掉的 bug）。
+// 走 `parseCost()` 判空 + 本函数格式化，才能同时保证"无价不显示"和"区间/单值一致"。
+//
+// @param {string|null} cost 已由 `costOf()` 归一过的原串（`"300-500"` / `"400"` / null）
+// @returns {string|null} `¥300-500` / `¥400`；**无价返回 null**，调用方据此跳过拼接。
+function costText(cost) {
+  const c = parseCost(cost);
+  if (!c) return null;
+  return c.low === c.high ? `¥${c.low}` : `¥${c.low}-${c.high}`;
+}
+
 // 星级从高德 POI 类型文本提取（“住宿服务;五星级宾馆;…”）
 function starFromType(t = '') {
   if (/五星级|豪华型/.test(t)) return 5;
@@ -568,10 +597,7 @@ async function findHotels(anchors, budgetKey, party) {
       sortrule: 'weight',
     });
     const hotels = (data?.pois || [])
-      .map((p) => {
-        const n = normalizePoi(p);
-        return n ? { ...n, cost: p.biz_ext?.cost } : null;
-      })
+      .map((p) => normalizePoi(p)) // cost 已在 normalizePoi 内归一（SR-02），此处不再重复赋值
       .filter(Boolean);
     if (!hotels.length) return [];
 
@@ -585,7 +611,23 @@ async function findHotels(anchors, budgetKey, party) {
       return true;
     });
     if (!pool.length) pool = hotels.filter((h) => parseCost(h.cost));
-    if (!pool.length) pool = hotels;
+
+    // 【SR-04b】FX-06a 探针实测：酒店 `biz_ext.cost` **0/20 全空** → 上面两级价格过滤
+    // 必然落空，最终 `pool = hotels` 全量，预算档（economy/comfort/luxury）对选酒店
+    // **零影响** —— 这是创建页与 PRD 明确承诺的能力，属承诺落空而非技术瑕疵。
+    // 兜底：价格不可用时改用**星级档**过滤，星级来自高德 POI 类型文本（`p.type`，
+    // 与 `cost` 无关，不受"酒店无价格源"影响），且 `BUDGET_STARS` 与下方评分用的是
+    // 同一张表，口径一致。仍为空才退回全量（优雅降级，不会比修复前更差）。
+    let budgetBasis = 'price';
+    if (!pool.length) {
+      budgetBasis = 'star';
+      const stars = BUDGET_STARS[budgetKey] || [];
+      pool = hotels.filter((h) => stars.includes(starFromType(h.typeText || '')));
+    }
+    if (!pool.length) {
+      budgetBasis = 'none';
+      pool = hotels;
+    }
 
     // 位置分：到锚点集合的加权距离（越小越好，min-max 归一）
     const weightedDist = (h) => anchors.reduce((s, a) => s + a.w * haversineKm(h, a.poi), 0);
@@ -605,9 +647,17 @@ async function findHotels(anchors, budgetKey, party) {
       const nearest = Math.min(...anchors.map((a) => haversineKm(h, a.poi)));
       const bits = [`位置${posScore >= 0.66 ? '优' : posScore >= 0.33 ? '良' : '一般'}·距行程点${nearest.toFixed(1)}km`];
       if (h.rating) bits.push(`口碑${h.rating}`);
-      if (h.cost) bits.push(`¥${h.cost}`);
+      // 【SR-04a】旧写法 `if (h.cost) bits.push(\`¥${h.cost}\`)` 会拼出**悬空的 ¥**：
+      // `biz_ext.cost` 无值时是空数组 `[]`，在 JS 里 truthy → 推荐理由变成
+      // 「位置优·口碑4.6·¥·四星」。现在统一走 `costText()` —— 与 :581/:587 的
+      // `parseCost()` 同一套口径，且无价返回 null → 整段跳过，不拼接。
+      const costLabel = costText(h.cost);
+      if (costLabel) bits.push(costLabel);
       if (star) bits.push(star === 5 ? '五星' : star === 4 ? '四星' : star === 3 ? '三星' : '经济连锁');
       if (familyBonus) bits.push('或有亲子房型');
+      // 【SR-04b 诚实降级】预算档没有按价格生效时，明说是按什么匹配的，不假装按价格选过
+      if (budgetBasis === 'star') bits.push('档位按星级匹配（参考价缺失）');
+      else if (budgetBasis === 'none') bits.push('档位未生效（参考价与星级均不可用）');
       return { poi: h, score: total, reason: bits.join('·') };
     });
     scored.sort((a, b) => b.score - a.score);
@@ -726,6 +776,10 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
     openTime: poi.openTime || null,
     closeTime: poi.closeTime || null,
     rating: poi.rating || null,
+    // 【SR-02】参考价原串透传到地点层（已由 normalizePoi 归一：空数组 → null）。
+    // 餐饮：实测 18/20 有值（人均）→ 客户端可**离线**取用，无需再打 /api/planner/prices。
+    // 酒店/景点：实测 0/20 全空 → 恒 null，客户端按"暂无参考价"降级，不编造。
+    cost: poi.cost || null,
     arrivalTime: fmt(arrival),
     leaveTime: fmt(arrival + stay),
     mealFor: extra.isMeal || null,
@@ -733,10 +787,20 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
   };
 }
 
-function addDays(iso, n) {
-  const d = new Date(`${iso}T00:00:00`);
-  d.setDate(d.getDate() + n);
-  return d.toISOString().slice(0, 10);
+// FX-01：日期加减必须走 UTC 基准。
+// 旧实现 `new Date(iso + 'T00:00:00')` 按**本地时区**解析、`toISOString()` 按 **UTC** 输出，
+// 在东八区（UTC+8）每一天系统性少 1 天（10-01 + 0 天 → 09-30），在 UTC-5 则可能多算。
+// 这里统一按 UTC 年月日构造（Date.UTC 会自动处理跨月/跨年/闰年进位），结果与时区无关。
+// multiCity.js 从本模块 import addDays —— 改这一处即修两条管线，不要在别处另写第二份实现。
+export function addDays(iso, n) {
+  const head = String(iso == null ? '' : iso).slice(0, 10);
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(head);
+  if (!m) return String(iso == null ? '' : iso); // 非 yyyy-MM-dd：原样返回，不静默产出错误日期
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  const step = Number.isFinite(Number(n)) ? Number(n) : 0;
+  return new Date(Date.UTC(y, mo - 1, d + step)).toISOString().slice(0, 10);
 }
 
 async function llmAssign(candidates, days, interestLabels, desc = '') {
@@ -949,6 +1013,8 @@ export function registerPlannerRoutes(app) {
 export {
   queryPois, normalizePoi, gatherCandidates, geocodeCity, haversineKm,
   clusterByDay, buildDay, findHotels, findNearbyRestaurant, segmentMinutes,
-  findRestStop, findRentalHub, toLocation, fmt, toMin, addDays, extractHints,
+  findRestStop, findRentalHub, toLocation, fmt, toMin, extractHints,
+  // cost 口径三件套（SR-02 / SR-04a 收敛）：多城管线复用同一套，避免各抄一份正则
+  costOf, parseCost, costText,
   INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
 };

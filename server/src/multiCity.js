@@ -8,13 +8,20 @@
 // 铁律不变：AI 只做编排，所有地点/路线/时间来自高德真实数据；建议不决策，可回退。
 import { amapCall } from './amapProxy.js';
 import { isLlmEnabled, llmChat } from './llm.js';
-import { makeCache } from './util.js';
+import { makeCache, makeRateLimit } from './util.js';
 import {
   gatherCandidates, geocodeCity, haversineKm, clusterByDay, buildDay,
   findHotels, segmentMinutes, findRentalHub, toLocation, fmt, toMin, addDays,
   extractHints, queryPois, normalizePoi,
   INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
 } from './planner.js';
+
+// ---------- M2 止血（防 DoS / 防高德配额被放大） ----------
+// 入参上限：超限在进入高德前直接 400，错误信息回显实际数量，方便客户端定位
+const MAX_CITIES = 8;              // 单次 corridor 最多城市数
+const MAX_TOTAL_LOCATIONS = 50;    // 单次 recalc 全行程最多地点数
+// 限流：corridor / recalc 各自独立 5 次/分/IP（复用 util.js 的 makeRateLimit，零新依赖）
+const MULTICITY_RATE = { windowMs: 60_000, max: 5 };
 
 // ---------- S3 城市排序（纯函数，可单测） ----------
 // 最近邻 + 2-opt。优化用直线距离（便宜），最终段间耗时再用高德真实路网算。
@@ -255,16 +262,25 @@ export function morningWindow({ depMin, prep, t2hubMin, startClock }) {
 export async function planCorridor(input) {
   const originName = String(input.origin || input.fromCity || '').trim();
   if (!originName) { const e = new Error('请填写出发地 origin（如：北京）'); e.status = 400; e.expose = true; throw e; }
+  // M2：城市数上限（在任何 await / 高德调用之前拦截，超限不烧配额）
+  const rawCities = Array.isArray(input.cities) ? input.cities : [];
+  if (rawCities.length > MAX_CITIES) {
+    const e = new Error(`城市数量过多：收到 ${rawCities.length} 个，单次最多支持 ${MAX_CITIES} 个`);
+    e.status = 400; e.expose = true; throw e;
+  }
   const days = Math.min(15, Math.max(2, parseInt(input.days, 10) || 5));
   const tripMode = ['pureDrive', 'pureTransit', 'transitPlusRental'].includes(input.tripMode) ? input.tripMode : 'pureDrive';
   const roundTrip = input.roundTrip !== false;
   const vehicle = ['flight', 'highSpeedTrain', 'train', 'bus', 'ship'].includes(input.intercityVehicle) ? input.intercityVehicle : 'highSpeedTrain';
+  // M1（TDZ 修复）：warnings 必须先声明再使用。
+  // 旧代码把 `const warnings = []` 写在 schedules 之后，而下一行就 push → 只要传了 schedules，
+  // 请求必抛 ReferenceError: Cannot access 'warnings' before initialization → 100% 500。
+  const warnings = [];
+  const suggestions = []; // 被收紧/裁剪的 POI（可手动加回 —— 铁律：默认可撤销）
   // 班次锚：用户传入的真实班次（时间固定）；混合模式落地方式：租车/包车
   const schedules = parseSchedules(input.schedules);
   if (schedules.length) warnings.push(`已加载 ${schedules.length} 个真实班次（时间固定，前后行程按班次锚定，只能前后推）`);
   const groundMode = input.groundMode === 'charter' ? 'charter' : 'rental';
-  const warnings = [];
-  const suggestions = []; // 被收紧/裁剪的 POI（可手动加回 —— 铁律：默认可撤销）
 
   const hints = extractHints(String(input.description || '').trim());
   let pace = ['relaxed', 'normal', 'packed'].includes(input.pace) ? input.pace : 'normal';
@@ -672,6 +688,10 @@ export async function planCorridor(input) {
           const arrival = base + (travel ? travel.minutes : 15);
           const hotelLoc = toLocation({ ...prevHotel, typecode: '100100' }, arrival, 600, travel, {});
           hotelLoc.stayNote = '连住';
+          // 【裁 5 上游根治】酒店点自身直接带 cost（高德 biz_ext.cost 原串，如 "300-500"）。
+          // 旧做法只有 hotelCandidates 里有价，客户端必须"按 name 回匹配自己"才能取到，
+          // 用户改名 / 服务端不返回自身候选时就会永远取不到 —— 这里从根上消除该脆弱约定。
+          hotelLoc.cost = prevHotel.cost || null;
           const alts = cands.filter((cd) => cd.poi.name !== prevHotel.name).slice(0, 3);
           if (alts.length) {
             hotelLoc.hotelCandidates = alts.map((cd) => ({
@@ -689,6 +709,8 @@ export async function planCorridor(input) {
             : null;
           const arrival = base + (travel ? travel.minutes : 15);
           const hotelLoc = toLocation({ ...best.poi, typecode: '100100' }, arrival, 600, travel, {});
+          // 【裁 5 上游根治】同上：酒店点自身带 cost，客户端不再依赖 name 回匹配
+          hotelLoc.cost = best.poi.cost || null;
           hotelLoc.hotelCandidates = cands.map((cd) => ({
             name: cd.poi.name, address: cd.poi.address, latitude: cd.poi.lat, longitude: cd.poi.lng,
             rating: cd.poi.rating || null, cost: cd.poi.cost || null, reason: cd.reason,
@@ -784,6 +806,13 @@ export async function planCorridor(input) {
 export async function recalcTrip(input, { travelFn = null } = {}) {
   const trip = input && input.trip;
   if (!trip || !Array.isArray(trip.days)) { const e = new Error('缺少 trip.days'); e.status = 400; e.expose = true; throw e; }
+  // M2：全行程地点数上限（每段都要算路，N 个点 ≈ N 次高德调用，必须封顶）
+  const totalLocations = trip.days.reduce(
+    (s, d) => s + (d && Array.isArray(d.locations) ? d.locations.length : 0), 0);
+  if (totalLocations > MAX_TOTAL_LOCATIONS) {
+    const e = new Error(`行程点数量过多：收到 ${totalLocations} 个，单次最多支持 ${MAX_TOTAL_LOCATIONS} 个`);
+    e.status = 400; e.expose = true; throw e;
+  }
   const scope = input.scope === 'trip' ? 'trip' : 'day';
   const mode = trip.tripMode === 'pureTransit' ? 'transit' : 'drive';
   const warnings = [];
@@ -904,13 +933,18 @@ export async function lookupPrice({ city, name, kind = 'hotel' }) {
 
 // ---------- 路由注册 ----------
 export function registerMultiCityRoutes(app) {
-  app.post('/api/planner/corridor', async (req, res, next) => {
+  // M2：corridor / recalc 各挂一个独立限流器（5 次/分/IP）。
+  // 每次 makeRateLimit 调用返回独立桶，互不影响（util.js 已按限流器实例隔离计数）。
+  const corridorLimit = makeRateLimit(MULTICITY_RATE);
+  const recalcLimit = makeRateLimit(MULTICITY_RATE);
+
+  app.post('/api/planner/corridor', corridorLimit, async (req, res, next) => {
     try {
       const result = await planCorridor(req.body || {});
       res.json(result);
     } catch (e) { next(e); }
   });
-  app.post('/api/planner/recalc', async (req, res, next) => {
+  app.post('/api/planner/recalc', recalcLimit, async (req, res, next) => {
     try {
       const result = await recalcTrip(req.body || {});
       res.json(result);
