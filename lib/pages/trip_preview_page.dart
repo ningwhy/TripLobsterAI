@@ -11,6 +11,7 @@ import '../services/weather_repository.dart';
 import '../theme/preview_theme.dart';
 import '../utils/cost_aggregator.dart';
 import '../utils/date_fix.dart';
+import '../utils/day_anchor.dart';
 import '../utils/ota_deeplink.dart';
 import '../providers/trip_provider.dart';
 import '../widgets/timeline/day_anchor_table.dart';
@@ -212,6 +213,7 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
 
   void _onDayTap(int i) {
     setState(() => _activeDayIndex = i); // 立即高亮，不等动画
+    _centerDayStripCell(i); // >7 天横滚模式：选中格滚到中间
     _anchor.isProgrammatic = true;
     final target = _anchor.targetFor(i);
     if (target == null) {
@@ -226,6 +228,36 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
       return;
     }
     _animateTo(target, i);
+  }
+
+  /// 【横滚接线】>7 天时把选中格横向居中（PM 规格：`animateTo`，300ms）。
+  ///
+  /// `DayAnchor.centeredScrollOffset` 内已做首/末格钳制（负 → 0，超 → maxScroll），
+  /// 故这里只需取真实视口宽与最大滚动量，不用自己判边界。
+  ///
+  /// 此前 `DayAnchor.centeredScrollOffset` 是**零调用点**的死代码
+  /// （`_dayStripController` 只声明/dispose/传入，从未被驱动）。
+  void _centerDayStripCell(int i) {
+    final c = _dayStripController;
+    if (!c.hasClients) return;
+    final pos = c.position;
+    // 视口尺寸未就绪时不猜，避免用错宽度把选中格推出屏幕
+    if (!pos.hasViewportDimension || !pos.hasContentDimensions) return;
+
+    final offset = DayAnchor.centeredScrollOffset(
+      index: i,
+      count: _days.length,
+      cellWidth: DayStrip.cellWidth,
+      viewportWidth: pos.viewportDimension,
+      maxScroll: pos.maxScrollExtent,
+    );
+    // 已在目标位置就不动画，避免每次点击都触发一次无谓的横向滚动
+    if ((c.offset - offset).abs() < 0.5) return;
+    c.animateTo(
+      offset,
+      duration: const Duration(milliseconds: 300),
+      curve: Curves.easeInOut,
+    );
   }
 
   Future<void> _animateTo(double target, int i) async {
@@ -274,7 +306,12 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
       _scheduleMeasure();
     }
 
-    final costTexts = days.map((d) => CostAggregator.lowerBoundText(_costOf(d).low)).toList();
+    // 【三态】单值不带 `≥`、真区间带 `≥`、无数据 `—`；必须传 high，否则退化成单值。
+    // ⚠️ 每 day 只算一次：`_costOf` 会跑一遍全量聚合，重复调用是 O(n²)。
+    final dayCosts = days.map(_costOf).toList();
+    final costTexts = dayCosts
+        .map((c) => CostAggregator.lowerBoundText(c.low, c.high))
+        .toList();
     final hasHome = days
         .map((d) => d.locations.any((l) => l.type == LocationType.home))
         .toList();
@@ -388,6 +425,8 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
                             .isNotEmpty
                     ? () => _showHotelSwitch(loc)
                     : null,
+            // 乘数唯一出口（PR-10）：票价 `¥553×2` 用它，widget 不自己算人数
+            peopleCount: _priceSource.peopleCount(widget.trip),
           ),
         ),
       );
@@ -428,7 +467,8 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
       high += c.high;
       missing += c.missingCount;
     }
-    final amount = (low == 0 && high == 0)
+    final isEmptyAmount = low == 0 && high == 0;
+    final amount = isEmptyAmount
         ? PreviewStrings.dayCostEmpty
         : (low == high
             ? '¥${CostAggregator.fmtAmount(low)}'
@@ -451,10 +491,15 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
               const SizedBox(width: 6),
               const Text('全行程已计价', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PreviewColors.ink)),
               const Spacer(),
-              Text(amount, style: PreviewText.costNum),
+              // 空态不出金额（不显示 ¥0、不显示 ¥—）
+              if (isEmptyAmount)
+                Flexible(child: Text(amount, style: PreviewText.costLabel))
+              else
+                Text(amount, style: PreviewText.costNum),
             ],
           ),
           const SizedBox(height: 6),
+          // 【常驻副行】与分组尾同一口径文案，**空态也必须显示**（诚实性承载点）
           Text(
             '${PreviewStrings.priceScope}${missing > 0 ? ' · $missing 项未取到价' : ''}',
             style: PreviewText.costLabel,
@@ -499,6 +544,10 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
             const SizedBox(height: 6),
             Text(stats.note!, style: PreviewText.costLabel),
           ],
+          const SizedBox(height: 6),
+          // 【常驻副行】与分组尾同口径：本卡**只含服务端那几项**，不含餐饮/交通参考价。
+          // 明写出来，避免用户把它与「当日已计价」当成同一口径相加。
+          Text(PreviewStrings.priceScope, style: PreviewText.costLabel),
           const SizedBox(height: 6),
           Text(TripCost.scopeConflictNote,
               style: const TextStyle(fontSize: 11, color: PreviewColors.priceRedText)),

@@ -305,11 +305,33 @@ void main() {
       expect(CostAggregator.fmtAmount(1234567), '1,234,567');
     });
 
-    test('lowerBoundText：≥ 前缀不可省；无数据显示 —，绝不 ¥0', () {
-      expect(CostAggregator.lowerBoundText(1300), '≥¥1,300');
-      expect(CostAggregator.lowerBoundText(13000), '≥¥1.3万');
+    test('lowerBoundText 三态：无数据 — / 单值不带 ≥ / 真区间带 ≥', () {
+      // 无数据：绝不 ¥0（PR-09 验收③）
       expect(CostAggregator.lowerBoundText(0), '—');
       expect(CostAggregator.lowerBoundText(-5), '—');
+      expect(CostAggregator.lowerBoundText(0, 500), '—');
+
+      // 单值（low == high）：没有区间 → 不带 ≥（≥ 用在确定值上是误导）
+      expect(CostAggregator.lowerBoundText(1900, 1900), '¥1,900');
+      expect(CostAggregator.lowerBoundText(1900), '¥1,900'); // 省略 high = 单值
+
+      // 真区间：只显下限，不取中值（【裁 1】取中值即估算）
+      expect(CostAggregator.lowerBoundText(1300, 1700), '≥¥1,300');
+      expect(CostAggregator.lowerBoundText(1300, 1700), isNot(contains('1,700')));
+
+      // 万位压缩
+      expect(CostAggregator.lowerBoundText(13000, 13000), '¥1.3万');
+      expect(CostAggregator.lowerBoundText(13000, 17000), '≥¥1.3万');
+      expect(CostAggregator.lowerBoundText(120000, 120000), '¥12万');
+      expect(CostAggregator.lowerBoundText(120000, 130000), '≥¥12万');
+    });
+
+    test('lowerBoundText ⛔ 任何组合都不产生 ¥0', () {
+      for (final low in [0, -1, 1]) {
+        for (final high in [0, -1, 1, 500]) {
+          expect(CostAggregator.lowerBoundText(low, high), isNot(contains('¥0')));
+        }
+      }
     });
   });
 

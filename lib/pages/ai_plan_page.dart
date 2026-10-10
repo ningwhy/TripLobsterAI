@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../models/trip_cost.dart';
 import '../models/trip_models.dart';
 import '../providers/trip_provider.dart';
 import '../services/api_client.dart';
@@ -171,6 +172,26 @@ class _AiPlanPageState extends State<AiPlanPage> {
   Trip _buildTrip(Map<String, dynamic> result) {
     final tripData = Map<String, dynamic>.from(result['trip'] as Map);
     final now = DateTime.now();
+
+    // 【C-9 取数层】回填 `statsCost`（【裁 2】：它在 `stats` 下、不在 `trip` 下）。
+    //
+    // 本轮**不接** `/api/planner/corridor`，故 `stats.cost` 恒缺失 → 恒为 null，
+    // 与「渲染层零改动」的既有裁决一致（本轮不渲染任何 stats 卡，行为不触发）。
+    // 这里只把**取数链路接通**，使下迭代接上 corridor 时小卡自动亮、无需再改此处。
+    //
+    // ⛔ 缺失/非Map 一律 null：**不估算、不兜底、不编造金额**。
+    // ⛔ 不改`@nonPersisted`、不动 `TripProvider`：`_adopt()` 把 `final trip` 这个
+    //    **从未被序列化的原始对象引用**传给 `TripPreviewPage`，所以本字段能活着进预览页；
+    //    它只在「冷启动后从 `getTrips()` 读回」时才丢失，那是下迭代的另一条触发条件。
+    TripCost? statsCost;
+    final rawStats = result['stats'];
+    if (rawStats is Map) {
+      final rawCost = rawStats['cost'];
+      if (rawCost is Map) {
+        statsCost = TripCost.fromJson(Map<String, dynamic>.from(rawCost));
+      }
+    }
+
     final days = (tripData['days'] as List).map((d) {
       final day = Map<String, dynamic>.from(d as Map);
       return TripDay(
@@ -231,6 +252,7 @@ class _AiPlanPageState extends State<AiPlanPage> {
       budget: _budget,
       createdAt: now,
       updatedAt: now,
+      statsCost: statsCost,
     );
   }
 

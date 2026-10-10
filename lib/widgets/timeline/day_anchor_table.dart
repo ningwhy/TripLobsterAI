@@ -51,7 +51,22 @@ class DayAnchorTable {
       if (box is! RenderBox) continue;
       offsets[i] = box.localToGlobal(Offset.zero).dy - listTop + position.pixels;
     }
-    _dirty = false;
+    // 【锚点真 bug 修复】原为无条件 `_dirty = false`，是**错的**。
+    //
+    // ListView 首帧只构建视口内的 item，长行程下 `keys[i].currentContext == null`
+    // 会命中上面的 `continue`，`offsets` 里留下若干 `null`。此时若仍置干净：
+    //   1. `activeIndex` 因 `known.length != dayCount` 恒返回 0 → **所有天都不高亮**；
+    //   2. 唯一的重测入口 `_onScroll: if (isDirty) _scheduleMeasure()` 不再触发；
+    //   3. 用户继续滚动、后几天陆续挂载补齐了 `offsets`，本该恢复，但**已无重测路径**
+    //      （只有天气/价格回调或用户编辑才会 `markDirty`）。
+    // ⇒ 高亮永久卡在 Day 1，滚动联动彻底失灵。
+    //
+    // 改为"**测全才置干净**"：未测全保持脏 → 每一帧继续测 → 测全后 `isDirty=false`
+    // 不再重测（无持续性能开销）。
+    //
+    // ⛔ 不要因此动 `activeIndex` 的 `known.length != dayCount → return 0` 守卫：
+    //    它防的正是"未测全时用陈旧偏移抢高亮"，与本修复互补而非重复。
+    _dirty = offsets.any((o) => o == null);
   }
 
   /// 第 i 天的偏移（未测量返回 null）

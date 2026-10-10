@@ -41,6 +41,12 @@ class LocationCard extends StatelessWidget {
   final VoidCallback onRemove;
   final VoidCallback? onSwitchHotel;
 
+  /// 出行人数（用于班次票价 `¥553×2`）。
+  ///
+  /// 由页面用 `PriceSource.peopleCount(trip)` 传入 —— widget **不自己算人数**，
+  /// 避免"乘数语义"散落到多处（PR-10：乘数只允许有一个出口）。
+  final int peopleCount;
+
   const LocationCard({
     super.key,
     required this.location,
@@ -54,6 +60,7 @@ class LocationCard extends StatelessWidget {
     required this.onEditStay,
     required this.onRemove,
     this.onSwitchHotel,
+    this.peopleCount = 1,
   });
 
   @override
@@ -117,7 +124,7 @@ class LocationCard extends StatelessWidget {
             const SizedBox(height: 4),
             // ② meta
             Text(
-              _metaText(loc),
+              _metaText(loc, peopleCount: peopleCount),
               maxLines: 2,
               overflow: TextOverflow.ellipsis,
               style: PreviewText.cardMeta,
@@ -169,9 +176,11 @@ class LocationCard extends StatelessWidget {
     if (t != null && t.estimated == true) return '估算';
     switch (loc.type) {
       case LocationType.restaurant:
-        // 餐饮：人均价（探针实测 18/20 有值）。
-        // SR-02 后服务端已随 payload 下发（`planner.js`：`normalizePoi()` 把空数组归一为 null、
-        // `toLocation()` 透传），故这里通常能取到值；取不到则**不留占位**（占位等于编造）。
+        // 餐饮：人均价（探针实测 18/20 有值），**随行程 payload 离线下发，0 次价格请求**。
+        // SR-02：`planner.js` `normalizePoi()` 把 `biz_ext.cost` 归一（空数组 → null）、
+        // `toLocation()` 透传，故这里通常能取到值；取不到则**不留占位**（占位等于编造）。
+        //
+        // ⚠️ 不要再把本类型当成"需联网取价"：`requestKindFor()` 恒 null，刷新按钮对它无效。
         //
         // 逗号处理必须与服务端 `costText()` 同口径：中英文逗号都要清掉。
         // 只清英文逗号的话，高德偶发的中文逗号会静默解析失败 → 明明有价却显示"无价"。
@@ -195,9 +204,16 @@ class LocationCard extends StatelessWidget {
     }
   }
 
-  /// meta 文案（停留 / 营业时间 / ⚠️ 冲突 / 连住 / 班次）
-  static String _metaText(Location loc) {
+  /// meta 文案（地点 / 停留 / 营业时间 / ⚠️ 冲突 / 连住 / 班次票价）
+  ///
+  /// 【TL-10 回归 + US-1】首段补地址/城市：服务端 `normalizePoi` 已返回 `address`/`city`，
+  /// 但此前**客户端零引用**（grep `\.address` 在 timeline 层 0 命中）。
+  /// 多城走廊里"北京站/天津站"这类同名地点很常见，只显示名称无法区分是哪个城的。
+  static String _metaText(Location loc, {int peopleCount = 1}) {
     final bits = <String>[];
+    // 首段：城市 + 地址（同名地点的区分依据）。两者都空则跳过，不留空占位。
+    final place = _placeText(loc);
+    if (place.isNotEmpty) bits.add(place);
     if (arrivalTimeOf(loc) != null) bits.add(arrivalTimeOf(loc)!);
     final stay = loc.stayMinutes;
     if (stay != null && stay > 0) bits.add('停留${_dur(stay)}');
@@ -221,11 +237,51 @@ class LocationCard extends StatelessWidget {
       if (t.durationMinutes != null && t.durationMinutes! > 0) {
         bits.add(_dur(t.durationMinutes!));
       }
+      // 【新增】班次票价：`¥553×2`。
+      //
+      // ⛔ `price == null` **不显示任何片段** —— 服务端估算分支恒 null
+      // （`planner.js:475` / `multiCity.js:569,735`），此时写"暂无票价"是噪音，
+      // 写 `¥0` 是撒谎。诚实缺失即留空。
+      //
+      // ⚠️ 只乘人数、**不乘 rooms**（与 `PriceSource.peopleCount` 同口径，PR-10 硬约束：
+      // "人均"与"每间夜"是两套语义，房间数不得进入计价路径）。
+      final fare = _fareText(t.price, n: peopleCount);
+      if (fare.isNotEmpty) bits.add(fare);
       if (t.isScheduled) bits.add('班次固定');
       if (t.isEstimate) bits.add('时长为估算占位，班次以 12306/航司为准');
     }
     return bits.join(' · ');
   }
+
+  /// 班次票价文案：`¥553×2`（[n] 为人数）。
+  ///
+  /// 单人（[n] <= 1）时省略 `×n` —— `¥553×1` 是噪音。
+  /// ⛔ [price] 为 null / 非正数 → 返回空串（**不估算、不兜底、不显示 ¥0**）。
+  static String _fareText(num? price, {int n = 1}) {
+    if (price == null || !price.isFinite || price <= 0) return '';
+    // 服务端给的是元（可能带小数），按元展示不换算单位
+    final s = price == price.roundToDouble()
+        ? price.round().toString()
+        : price.toStringAsFixed(1);
+    return n > 1 ? '¥$s×$n' : '¥$s';
+  }
+
+  /// 地点首段：城市 + 地址。
+  ///
+  /// 地址过长时截断（meta 只有 2 行，多城走廊的长地址会把班次信息挤出视野）。
+  static String _placeText(Location loc) {
+    final city = (loc.city ?? '').trim();
+    final addr = (loc.address ?? '').trim();
+    if (city.isEmpty && addr.isEmpty) return '';
+    // 地址已含城市名时不重复"北京 · 北京市…"
+    final addrHasCity = city.isNotEmpty && addr.contains(city);
+    if (city.isEmpty) return _trunc(addr);
+    if (addr.isEmpty || addrHasCity) return city;
+    return '$city · ${_trunc(addr)}';
+  }
+
+  static String _trunc(String s, [int max = 12]) =>
+      s.length <= max ? s : '${s.substring(0, max)}…';
 
   /// 优先用服务端时刻表
   static String? arrivalTimeOf(Location loc) =>

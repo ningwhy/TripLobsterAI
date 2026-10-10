@@ -16,10 +16,14 @@ import '../services/price_source.dart';
 ///
 /// | 来源 | 口径 | 实测可用性 |
 /// |---|---|---|
-/// | 餐饮 | 人均 `cost` × 人数 | ✅ 18/20 有值（**需用户点刷新**，服务端不下发） |
+/// | 餐饮 | 人均 `cost` × 人数 | ✅ 18/20 有值，**随行程 payload 离线下发**（SR-02：`planner.js` `normalizePoi()` 把 `biz_ext.cost` 归一后由 `toLocation()` 透传），**0 次价格请求** |
 /// | 跨城班次 | `transport.price` × 人数 | ✅ 随行程 payload 下发，0 次请求 |
 /// | 酒店 | —— | ❌ 0/20 全空 → `supports()==false`，不请求不渲染 |
 /// | 景点 | —— | ❌ 0/20 全空 → `supports()==false`，不请求不渲染 |
+///
+/// 【口径修正记录】此前本表写「餐饮需用户点刷新，服务端不下发」，与 SR-02 事实冲突。
+/// 该错误认知已连续三次导致误判（"TTL 是摆设" / "酒店有价" / "餐饮要联网"），
+/// 故在此显式写明：**餐饮价格随 payload 下发，点刷新也不会改变它**。
 ///
 /// 明确排除：油 / 电 / 过路 / 租车 / 包车（需按里程估算 → 严禁）。
 enum CostSource { dining, intercity }
@@ -136,17 +140,28 @@ class CostAggregator {
     return '${n < 0 ? '-' : ''}$buf';
   }
 
-  /// 日期条格子文案（只显**下限**，保守口径）：`≥¥1,300`；超 1 万压缩为 `≥¥1.2万`
+  /// 日期条格子文案（**三态**，保守口径）
   ///
-  /// 无数据时返回 `—`，**绝不显示 `¥0`**。
-  static String lowerBoundText(int low) {
+  /// | 情形 | 输出 | 理由 |
+  /// |---|---|---|
+  /// | 无数据（`low <= 0`） | `—` | **绝不显示 `¥0`**（PR-09 验收③） |
+  /// | 单值（`low == high`） | `¥1,900` | 没有区间，不该带 `≥`（`≥¥1,900` 会被读成"至少 1900"，与实际确定值不符） |
+  /// | 真区间（`low < high`） | `≥¥1,300` | 只显下限，**不取中值**（取中值即估算，【裁 1】） |
+  ///
+  /// 超 1 万压缩：`≥¥1.2万`（单值时 `¥1.2万`）。
+  ///
+  /// [high] 缺省等于 [low]（旧调用点只有下限，保持单值语义）。
+  static String lowerBoundText(int low, [int? high]) {
     if (low <= 0) return '—';
+    final h = high ?? low;
+    // 单值：无区间 → 不带 `≥`（`≥` 是"下界"符号，用在确定值上是误导）
+    final single = h <= low;
     if (low >= 10000) {
       final w = low / 10000;
       final s = w >= 10 ? w.toStringAsFixed(0) : w.toStringAsFixed(1);
-      return '≥¥${s}万';
+      return single ? '¥${s}万' : '≥¥${s}万';
     }
-    return '≥¥${fmtAmount(low)}';
+    return single ? '¥${fmtAmount(low)}' : '≥¥${fmtAmount(low)}';
   }
 }
 
