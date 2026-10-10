@@ -259,4 +259,47 @@ void main() {
       expect(PoiClassifier.hubKindForTransport(TransportType.selfDrive), isNull);
     });
   });
+
+  //本组回归针对一个**真实运行时崩溃**：`Location.address` 声明为非空 `String`，
+  // 而 `fromJson` 原直接 `address: json['address']`。服务端任一条 POI 缺 address 时，
+  // null 赋给非空 String 会抛类型错误、整页崩，而非安全降级为「无地址」。
+  // 由 `flutter analyze` 的 dead_null_aware_expression 顺带暴露。
+  group('Location.fromJson 缺字段兜底（address 为非空 String）', () {
+    test('完全无 address 键 → 空串，不抛类型错误', () {
+      final loc = Location.fromJson({'id': 'A1', 'name': '某店', 'type': 'restaurant'});
+      expect(loc.address, '');
+    });
+
+    test('address 显式为 null → 空串', () {
+      final loc = Location.fromJson({
+        'id': 'A2',
+        'name': '某店',
+        'type': 'restaurant',
+        'address': null,
+      });
+      expect(loc.address, '');
+    });
+
+    test('address 正常 → 原样保留', () {
+      final loc = Location.fromJson({
+        'id': 'A3',
+        'name': '某店',
+        'type': 'restaurant',
+        'address': '北京市东城区某某路 1 号',
+      });
+      expect(loc.address, '北京市东城区某某路 1 号');
+    });
+
+    test('city 缺失仍为 null（它是真正的可空字段，勿一并兜底成空串）', () {
+      final loc = Location.fromJson({'id': 'A4', 'name': '某店', 'type': 'restaurant'});
+      expect(loc.city, isNull);
+    });
+
+    test('最小可用POI 即可解析，不因可选字段缺失而崩', () {
+      final loc = Location.fromJson({'name': '只有名字'});
+      expect(loc.name, '只有名字');
+      expect(loc.address, '');
+      expect(loc.type, LocationType.other);
+    });
+  });
 }

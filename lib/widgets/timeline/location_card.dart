@@ -270,8 +270,10 @@ class LocationCard extends StatelessWidget {
   ///
   /// 地址过长时截断（meta 只有 2 行，多城走廊的长地址会把班次信息挤出视野）。
   static String _placeText(Location loc) {
+    // ⛔ `address` 是**非空** `String`（`Location.fromJson` 已做 `?? ''` 兜底），
+    //    这里**不得**再写 `?? ''` —— 那不是防御，是死代码，会掩盖"该兜底的地方没兜底"。
     final city = (loc.city ?? '').trim();
-    final addr = (loc.address ?? '').trim();
+    final addr = loc.address.trim();
     if (city.isEmpty && addr.isEmpty) return '';
     // 地址已含城市名时不重复"北京 · 北京市…"
     final addrHasCity = city.isNotEmpty && addr.contains(city);

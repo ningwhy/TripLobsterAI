@@ -317,18 +317,25 @@ class Location {
     'fixed': fixed,
   };
 
+  /// 🔒 [address] 声明为非空 `String`，故从 JSON 取值**必须**做 null 兜底。
+  ///
+  /// 【真实 bug，`flutter analyze` 的 `dead_null_aware_expression` 顺带暴露】
+  /// 原为 `address: json['address']` —— 直接把可能为 null 的动态值赋给非空 `String`，
+  /// 服务端任一条 POI 缺 address 时 `fromJson` 会**抛运行时类型错误**（整页崩），
+  /// 而非安全降级为「无地址」。这与三铁律「宁可少显示，不可显示错」相违：
+  /// 正确行为是**地址缺失就显示没有**，而不是让整页挂掉。
   factory Location.fromJson(Map<String, dynamic> json) => Location(
-    id: json['id'],
-    name: json['name'],
-    address: json['address'],
-    latitude: json['latitude'],
-    longitude: json['longitude'],
-    city: json['city'],
-    district: json['district'],
-    type: LocationType.values.firstWhere((e) => e.name == json['type'], orElse: () => LocationType.other),
-    hubKind: json['hubKind'],
-    stayMinutes: json['stayMinutes'],
-    transportMinutes: json['transportMinutes'],
+        id: json['id'],
+        name: json['name'],
+        address: (json['address'] as String?) ?? '',
+        latitude: json['latitude'],
+        longitude: json['longitude'],
+        city: json['city'],
+        district: json['district'],
+        type: LocationType.values.firstWhere((e) => e.name == json['type'], orElse: () => LocationType.other),
+        hubKind: json['hubKind'],
+        stayMinutes: json['stayMinutes'],
+        transportMinutes: json['transportMinutes'],
     openTime: json['openTime'],
     closeTime: json['closeTime'],
     isAutoAdded: json['isAutoAdded'] ?? false,
