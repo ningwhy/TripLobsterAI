@@ -67,7 +67,24 @@ class PreviewText {
   static const badgeGray = TextStyle(fontSize: 10.5, fontWeight: FontWeight.w500, color: PreviewColors.chipGray);
   static const weather = TextStyle(fontSize: 11.5, fontWeight: FontWeight.w600, color: Color(0xFF3D4C5C));
   static const weatherWind = TextStyle(fontSize: 10.5, fontWeight: FontWeight.w400, color: PreviewColors.windText);
-  static const costNum = TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PreviewColors.green2);
+  /// 金额数字样式。
+  ///
+  /// ⚠️ **2026-10-10 修订（外部评审 P0-2）：价格降为次级信息**
+  ///
+  /// 原为 `green2`（强调色）+ `w700`。强调色会把视线从"行程执行信息"
+  /// （地点顺序 / 时段 / 交通耗时 / 营业时间冲突）抢到金额上，而本页金额
+  /// **结构性缺了酒店与门票**（占每日花费 40~60%），不配占据视觉主位。
+  ///
+  /// 修订后：改用中性墨色 `ink`、字重降至 `w600`，与正文同色系。
+  /// 金额仍然可读、仍然在，但不再**跳出来**——这正是评审要的
+  /// "价格是行程决策的一部分，不是产品中心"。
+  ///
+  /// ⛔ 本处**只改样式，不改文案**：「当日已计价」受【三铁律 3】锁定，
+  /// 不得改回「当日合计」，本次一字未动。
+  ///
+  /// ⚠️ 注意：本样式同时被页尾汇总卡与 `stats.cost` 卡复用，
+  /// 三处金额会一起降级——这是**故意**的，三者都不含酒店，口径一致。
+  static const costNum = TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: PreviewColors.ink);
   static const costLabel = TextStyle(fontSize: 11.5, color: PreviewColors.sub);
   static const statusLine = TextStyle(fontSize: 11, color: PreviewColors.chipGray);
 }

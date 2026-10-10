@@ -456,7 +456,20 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
 
   /// 行程级费用出口：
   /// - 有 `stats.cost` → 独立小卡（items + total + note + 口径冲突说明）【裁 2】
-  /// - 无 → 全行程"可归集合计"（仅卡片可归集价格），明写未含油电过路
+  /// - 无 → 行程"可归集合计"（仅卡片可归集价格），明写未含油电过路
+  ///
+  /// ⚠️ **标题语义修订（2026-10-10 外部评审 P0）**
+  ///
+  /// 原标题 `全行程已计价` 会被读成"整趟旅行的费用已全部核算"，
+  /// 而本卡实际只累加**卡片级可归集价格**（餐饮 + 交通班次），
+  /// **酒店与门票完全不在内**——酒店通常占每日花费 40~60%。
+  ///
+  /// 注意区分：这**不是**「页面在骗人」（常驻副行已明示口径 `含 餐饮·交通 ｜ 未含：酒店 · 门票`），
+  /// 而是**标题这个 7 字短语自身携带了错误含义**。用户扫一眼标题就走，副行拦不住。
+  /// 因此修法是**改标题语义**，不是删卡——副行的诚实披露有独立价值，删了才是真损失。
+  ///
+  /// 【三铁律 3】只锁定「当日已计价」不得改回「当日合计」；本卡标题不在其列，
+  /// 且本修订的方向与铁律一致（**让标题更弱、更准**，不是更强）。
   Widget _buildTripCostFooter(List<TripDay> days) {
     final stats = widget.trip.statsCost;
     if (stats != null) return _buildStatsCostCard(stats);
@@ -492,7 +505,7 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
             children: [
               const Icon(Icons.account_balance_wallet_outlined, size: 16, color: PreviewColors.green2),
               const SizedBox(width: 6),
-              const Text('全行程已计价', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PreviewColors.ink)),
+              const Text('已计入部分费用', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: PreviewColors.ink)),
               const Spacer(),
               // 空态不出金额（不显示 ¥0、不显示 ¥—）
               if (isEmptyAmount)
