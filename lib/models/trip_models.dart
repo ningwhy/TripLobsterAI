@@ -239,6 +239,28 @@ class Location {
   /// 【裁 4】不读服务端 `_must`：它经 buildDay 后恒为 false、不可依赖。
   bool fixed;
 
+  /// 用户手动补录的实付金额（单位：元，**该项总价**，进 toJson 随云同步走）。
+  ///
+  /// ## 为什么需要它（外部评审 2026-10-10 建议，评审原话：
+  /// 「让用户自己填已订金额，比你们估算可靠」）
+  ///
+  /// 酒店/景点 `biz_ext.cost` 探针实测 **0/20 全空**，是源头无数据，短期内
+  /// 既接不到 OTA 报价也无解 —— 而这两类恰恰占每日花费 40~60%，「当日已计价」
+  /// 因此存在**结构性缺口**。但用户自己订完酒店/门票后**知道真实金额**。
+  ///
+  /// 由他填进来 → 缺口被真实数据补上，且**不违反三铁律**：
+  /// 三铁律禁止的是「**我们**造数据」（估算/编造/兜底填充），
+  /// 用户提供的实际支出是事实，不是估算。
+  ///
+  /// ## ⛔ 语义硬约束：**总价，不是人均**
+  /// 1. 用户填的是「我付了多少钱」，天然是总价（酒店一晚 520、门票 60）；
+  /// 2. 若当人均，就会与餐饮/交通的「人均 × 人数」口径混在同一聚合里，
+  ///    同一个数字出现两套语义，无法向用户解释；
+  /// 3. 故手填项**不参与任何乘法** —— `CostAggregator.aggregateDay()` 直接累加。
+  ///
+  /// `null` = 未补录（**与 0 不同**：0 表示用户明确填了「这项没花钱」）。
+  int? manualCost;
+
   Location({
     String? id,
     required this.name,
@@ -263,6 +285,7 @@ class Location {
     this.stayNote,
     this.cost,
     this.fixed = false,
+    this.manualCost,
   }) : id = id ?? const Uuid().v4();
 
   /// 获取城市名称，优先使用POI返回的city，否则从address解析
@@ -315,6 +338,7 @@ class Location {
     'stayNote': stayNote,
     'cost': cost,
     'fixed': fixed,
+    'manualCost': manualCost,
   };
 
   /// 🔒 [address] 声明为非空 `String`，故从 JSON 取值**必须**做 null 兜底。
@@ -351,6 +375,9 @@ class Location {
     stayNote: json['stayNote'] as String?,
     cost: json['cost'] as String?,
     fixed: json['fixed'] == true,
+    // `as num?` 而非 `as int?`：云同步往返经 JSON 后整数可能被带成小数，
+    // 直接 as int? 会抛；旧数据缺该字段 → null（未补录），向后兼容。
+    manualCost: (json['manualCost'] as num?)?.round(),
   );
 }
 

@@ -428,6 +428,8 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
                             .isNotEmpty
                     ? () => _showHotelSwitch(loc)
                     : null,
+            // 手填补录：**不受 supports() 限制** —— 酒店/景点恰恰最需要它
+            onManualCost: () => _editManualCost(loc),
             // 乘数唯一出口（PR-10）：票价 `¥553×2` 用它，widget 不自己算人数
             peopleCount: _priceSource.peopleCount(widget.trip),
           ),
@@ -679,6 +681,115 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
     if (!mounted) return;
     setState(() => _anchor.markDirty());
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('已移除「${loc.name}」')));
+  }
+
+  /// 手动补录实付金额（评审 2026-10-10 建议）
+  ///
+  /// 用途：酒店 / 门票的 `biz_ext.cost` 实测 0/20 全空（源头无数据），
+  /// 「当日已计价」缺掉占 40~60% 的最大项。用户订完知道自己付了多少 → 由他填。
+  /// 这是**真实数据**，不是估算，故不违反三铁律。
+  ///
+  /// ⛔ 语义：填的是**该项总价**，不乘人数（见 `Location.manualCost` 注释）。
+  Future<void> _editManualCost(Location loc) async {
+    // 两个依赖都在**第一个 await 之前**捕获（use_build_context_synchronously）：
+    // showDialog 期间用户可能返回上一页，await 之后 context 已失效。
+    final provider = context.read<TripProvider>();
+    final messenger = ScaffoldMessenger.of(context);
+
+    final controller = TextEditingController(
+      text: loc.manualCost == null ? '' : '${loc.manualCost}',
+    );
+    final raw = await showDialog<String?>(
+      context: context,
+      builder: (ctx) => _manualCostDialog(ctx, controller, loc.manualCost),
+    );
+    controller.dispose();
+    if (!mounted) return;
+    if (raw == null) return; // 取消 / 点遮罩关闭 → 什么都不做
+
+    int? next;
+    final t = raw.trim();
+    if (t.isEmpty) {
+      next = null; // 空串 = 清除手填值
+    } else {
+      final n = int.tryParse(t);
+      // 负数拒绝：负金额无意义，且会让聚合结果变小、对不上任何真实支出。
+      // 小数拒绝（用 int.tryParse 而非 num）：元为单位已够用，
+      // 允许小数会引入"四舍五入后与用户填的不一致"的对账问题。
+      if (n == null || n < 0) {
+        messenger.showSnackBar(
+          const SnackBar(content: Text('请输入 0 或正整数（单位：元）')),
+        );
+        return;
+      }
+      next = n;
+    }
+
+    loc.manualCost = next;
+    _persistDays(_days);
+    await provider.updateTrip(widget.trip);
+    if (!mounted) return;
+    setState(() {});
+    messenger.showSnackBar(
+      SnackBar(
+        content: Text(
+          next == null
+              ? '已清除「${loc.name}」的手填金额'
+              : '已记下「${loc.name}」实付 ¥${CostAggregator.fmtAmount(next)}',
+        ),
+      ),
+    );
+  }
+
+  Widget _manualCostDialog(
+    BuildContext ctx,
+    TextEditingController controller,
+    int? initial,
+  ) {
+    return AlertDialog(
+      title: const Text(
+        PreviewStrings.manualCostDialogTitle,
+        style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: PreviewColors.ink),
+      ),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            PreviewStrings.manualCostDialogHint,
+            style: TextStyle(fontSize: 12, color: PreviewColors.sub),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType: const TextInputType.numberWithOptions(decimal: false, signed: false),
+            decoration: const InputDecoration(
+              prefixText: '¥ ',
+              hintText: '0',
+              isDense: true,
+            ),
+            onSubmitted: (v) => Navigator.pop(ctx, v),
+          ),
+        ],
+      ),
+      actions: [
+        // 已填过才给"清除"：没填过时该按钮毫无意义，且会让人以为有东西可清
+        if (initial != null)
+          TextButton(
+            onPressed: () => Navigator.pop(ctx, ''),
+            child: const Text(PreviewStrings.manualCostClear),
+          ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('取消'),
+        ),
+        TextButton(
+          onPressed: () => Navigator.pop(ctx, controller.text),
+          child: const Text('确定'),
+        ),
+      ],
+    );
   }
 
   void _editStay(Location loc) {

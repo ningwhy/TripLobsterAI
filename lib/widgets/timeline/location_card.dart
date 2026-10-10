@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../../models/price_quote.dart';
 import '../../models/trip_models.dart';
 import '../../theme/preview_theme.dart';
+import '../../utils/cost_aggregator.dart';
 import '../../utils/ota_deeplink.dart';
 import 'price_badge.dart';
 
@@ -41,6 +42,14 @@ class LocationCard extends StatelessWidget {
   final VoidCallback onRemove;
   final VoidCallback? onSwitchHotel;
 
+  /// 手动补录实付金额（评审 2026-10-10 建议）
+  ///
+  /// null → 卡片不显示补录入口（例如只读场景）。
+  /// ⛔ 与 `showPrice` **互不相关**：`showPrice` 管的是"数据源能否给参考价"，
+  /// 补录管的是"用户愿不愿意填自己付的钱"。酒店 `showPrice==false` 恰恰
+  /// **最需要**补录入口 —— 不要把两者绑在一起。
+  final VoidCallback? onManualCost;
+
   /// 出行人数（用于班次票价 `¥553×2`）。
   ///
   /// 由页面用 `PriceSource.peopleCount(trip)` 传入 —— widget **不自己算人数**，
@@ -60,6 +69,7 @@ class LocationCard extends StatelessWidget {
     required this.onEditStay,
     required this.onRemove,
     this.onSwitchHotel,
+    this.onManualCost,
     this.peopleCount = 1,
   });
 
@@ -129,8 +139,16 @@ class LocationCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: PreviewText.cardMeta,
             ),
-            // ③ 价格徽章（不支持的类型整块跳过，不占高度）
-            if (showPrice) ...[
+            // ③ 价格区（手填 与 参考价 **互斥**，不同时显示）
+            //
+            // 互斥理由：两者若并列，用户会以为「当日已计价」把它们**都**算了进去，
+            // 而聚合器实际是"手填优先、参考价跳过"（见 `aggregateDay`）。
+            // 显示两个数字、只算一个 → 数字对不上，是最伤信任的那类错。
+            // 二选一后卡片上永远只有一个数，与聚合口径严格一致。
+            if (loc.manualCost != null) ...[
+              const SizedBox(height: 6),
+              _manualChip(loc.manualCost!),
+            ] else if (showPrice) ...[
               const SizedBox(height: 6),
               PriceBadge(quote: quote),
             ],
@@ -141,11 +159,42 @@ class LocationCard extends StatelessWidget {
               children: [
                 _action(OtaDeepLink.buttonText(OtaDeepLink.purposeOf(loc)), onOta),
                 _action('调整停留', onEditStay),
+                // 补录入口**不受 showPrice 限制**：酒店/景点无参考价源，
+                // 恰恰是最需要用户自己填的两类（见 `onManualCost` 注释）。
+                if (onManualCost != null)
+                  _action(
+                    loc.manualCost == null
+                        ? PreviewStrings.manualCostAdd
+                        : PreviewStrings.manualCostEdit,
+                    onManualCost!,
+                  ),
                 if (onSwitchHotel != null) _action('换一家', onSwitchHotel!),
                 _action('移除', onRemove, color: PreviewColors.sub),
               ],
             ),
           ],
+        ),
+      ),
+    );
+  }
+
+  /// 手填金额标记（点击可改）
+  ///
+  /// 用灰底而非绿底：绿底在 `price_badge.dart` 里已约定表示"数据源给的参考价"，
+  /// 手填是**另一类来源**（来源透明第三层要求两者可辨），复用绿色会抹掉这个区分。
+  Widget _manualChip(int amount) {
+    return GestureDetector(
+      onTap: onManualCost,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 3),
+        decoration: BoxDecoration(
+          color: PreviewColors.priceGrayBg,
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: PreviewColors.priceGrayBorder, width: 1),
+        ),
+        child: Text(
+          PreviewStrings.manualCostText('¥${CostAggregator.fmtAmount(amount)}'),
+          style: PreviewText.badgeGray,
         ),
       ),
     );

@@ -26,12 +26,20 @@ import '../services/price_source.dart';
 /// 故在此显式写明：**餐饮价格随 payload 下发，点刷新也不会改变它**。
 ///
 /// 明确排除：油 / 电 / 过路 / 租车 / 包车（需按里程估算 → 严禁）。
-enum CostSource { dining, intercity }
+/// 可归集价格的三类来源
+///
+/// 【来源透明】评审要求的第三层：区分「来源参考金额」/「用户手填金额」/
+/// 「已确认订单金额」。本轮只实现前两类，故枚举成员即全部来源，
+/// UI 侧按 `label` 区分，不得把不同来源的数字混成一个不说明来历的合计。
+enum CostSource { dining, intercity, manual }
 
 extension CostSourceLabel on CostSource {
   String get label => switch (this) {
         CostSource.dining => '餐饮',
         CostSource.intercity => '交通班次',
+        // 「手填」而非「用户填写」：副行空间只有两个字的位置，
+        // 且「手填」已足以表达"这个数不是我们算的"
+        CostSource.manual => '手填',
       };
 }
 
@@ -97,6 +105,24 @@ class CostAggregator {
     var missing = 0;
 
     for (final loc in day.locations) {
+      // 【手填优先，且必须在 `supports()` 之前】
+      //
+      // 位置是有意的，且**不能挪到 supports() 之后**：
+      // 酒店/景点 `supports()` 恒 false（源头 0/20 无数据），而它们恰恰是用户
+      // 最可能手填的两类（订完酒店知道自己付了多少）。若放在 supports() 之后，
+      // 手填金额会被静默丢弃 —— 本功能等于白做，且没有任何报错，是最难查的那类 bug。
+      //
+      // 语义上也应优先：手填是**已发生的真实支出**，参考价只是"大约"，
+      // 两者冲突时真实支出更可信。（本轮二者不会同时存在，但优先级要先定死。）
+      //
+      // ⛔ **不乘人数**：manualCost 是该项总价（见字段注释），
+      //    乘人数会与餐饮/交通的"人均×人数"口径混在一起。
+      final manual = loc.manualCost;
+      if (manual != null && manual >= 0) {
+        lines.add(CostLine(low: manual, high: manual, source: CostSource.manual));
+        continue;
+      }
+
       // 酒店 / 景点等不支持的类型：不请求、不渲染、也**不计入缺失**
       // （它们不是"取不到价"，而是"本轮本就没有这个数据源"，写进缺失项会误导用户）
       if (!source.supports(loc)) continue;
@@ -116,12 +142,22 @@ class CostAggregator {
       low += l.low;
       high += l.high;
     }
+    // 【来源透明】只要当天的数字里混有手填项，口径副行就必须显式带上「含手填」。
+    //
+    // 不加会怎样：用户看到「当日已计价 ¥2,340」，却无法分辨其中 520 是自己填的
+    // 酒店钱、1,820 是我们算的餐饮参考价 —— 两类可信度完全不同的数字被合成一个，
+    // 正是评审指出的「来源不透明」。副行是唯一能说清这件事的位置。
+    var scope = source.scopeText;
+    if (lines.any((l) => l.source == CostSource.manual) && scope.isNotEmpty) {
+      scope = '$scope · 含手填';
+    }
+
     return DayCost(
       low: low,
       high: high,
       lines: lines,
       missingCount: missing,
-      scopeText: source.scopeText,
+      scopeText: scope,
     );
   }
 
