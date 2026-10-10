@@ -89,7 +89,7 @@ class _TripMapPageState extends State<TripMapPage> {
                 borderRadius: BorderRadius.circular(8),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 10,
                   ),
                 ],
@@ -126,7 +126,7 @@ class _TripMapPageState extends State<TripMapPage> {
                 borderRadius: BorderRadius.circular(12),
                 boxShadow: [
                   BoxShadow(
-                    color: Colors.black.withOpacity(0.1),
+                    color: Colors.black.withValues(alpha: 0.1),
                     blurRadius: 10,
                   ),
                 ],
@@ -224,7 +224,7 @@ class _TripMapPageState extends State<TripMapPage> {
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
-                  color: _getTypeColor(type).withOpacity(0.4),
+                  color: _getTypeColor(type).withValues(alpha: 0.4),
                   blurRadius: 8,
                   spreadRadius: 2,
                 ),
@@ -244,7 +244,7 @@ class _TripMapPageState extends State<TripMapPage> {
               borderRadius: BorderRadius.circular(4),
               boxShadow: [
                 BoxShadow(
-                  color: Colors.black.withOpacity(0.1),
+                  color: Colors.black.withValues(alpha: 0.1),
                   blurRadius: 4,
                 ),
               ],

@@ -159,7 +159,7 @@ class CostAggregator {
     if (low >= 10000) {
       final w = low / 10000;
       final s = w >= 10 ? w.toStringAsFixed(0) : w.toStringAsFixed(1);
-      return single ? '¥${s}万' : '≥¥${s}万';
+      return single ? '¥$s万' : '≥¥$s万';
     }
     return single ? '¥${fmtAmount(low)}' : '≥¥${fmtAmount(low)}';
   }

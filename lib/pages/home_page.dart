@@ -115,7 +115,7 @@ class _HomePageState extends State<HomePage> {
                     border: Border.all(color: Colors.white, width: 3),
                     boxShadow: [
                       BoxShadow(
-                        color: AppColors.green.withOpacity(0.4),
+                        color: AppColors.green.withValues(alpha: 0.4),
                         blurRadius: 12,
                         offset: const Offset(0, 4),
                       ),
@@ -263,7 +263,7 @@ class _HomePageState extends State<HomePage> {
                 '开始一场说走就走的旅行 ✈',
                 style: TextStyle(
                   fontSize: 13,
-                  color: AppColors.textSub.withOpacity(0.9),
+                  color: AppColors.textSub.withValues(alpha: 0.9),
                 ),
               ),
             ],
@@ -279,7 +279,7 @@ class _HomePageState extends State<HomePage> {
       height: size,
       decoration: BoxDecoration(
         shape: BoxShape.circle,
-        border: Border.all(color: AppColors.green.withOpacity(opacity + 0.06), width: 10),
+        border: Border.all(color: AppColors.green.withValues(alpha: opacity + 0.06), width: 10),
       ),
     );
   }
@@ -413,7 +413,7 @@ class _HomePageState extends State<HomePage> {
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
                 decoration: BoxDecoration(
-                  color: Colors.white.withOpacity(0.92),
+                  color: Colors.white.withValues(alpha: 0.92),
                   borderRadius: BorderRadius.circular(10),
                 ),
                 child: Text(
@@ -469,7 +469,7 @@ class _HomePageState extends State<HomePage> {
                   width: 34,
                   height: 34,
                   decoration: BoxDecoration(
-                    color: Colors.white.withOpacity(0.25),
+                    color: Colors.white.withValues(alpha: 0.25),
                     borderRadius: BorderRadius.circular(10),
                   ),
                   child: const Center(child: Text('🤖', style: TextStyle(fontSize: 18))),
@@ -486,7 +486,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 10),
             Text(
               '告诉AI你的想法，自动生成完整行程',
-              style: TextStyle(fontSize: 11, color: Colors.white.withOpacity(0.92), height: 1.4),
+              style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.92), height: 1.4),
             ),
             const Spacer(),
             Row(
@@ -833,7 +833,7 @@ class _HomePageState extends State<HomePage> {
             Container(
               width: 88,
               height: 88,
-              decoration: BoxDecoration(color: AppColors.lavender, shape: BoxShape.circle),
+              decoration: const BoxDecoration(color: AppColors.lavender, shape: BoxShape.circle),
               child: const Icon(Icons.photo_library_outlined, size: 40, color: Color(0xFF9B7EDE)),
             ),
             const SizedBox(height: 18),
@@ -884,7 +884,7 @@ class _HomePageState extends State<HomePage> {
                         width: 52,
                         height: 52,
                         decoration: BoxDecoration(
-                          color: Colors.white.withOpacity(0.25),
+                          color: Colors.white.withValues(alpha: 0.25),
                           shape: BoxShape.circle,
                         ),
                         child: const Center(child: Text('🧳', style: TextStyle(fontSize: 26))),
@@ -901,7 +901,7 @@ class _HomePageState extends State<HomePage> {
                             const SizedBox(height: 4),
                             Text(
                               name != null ? '行程已开启云同步' : '点击登录，行程云同步不丢失',
-                              style: TextStyle(fontSize: 12, color: Colors.white.withOpacity(0.9)),
+                              style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.9)),
                             ),
                           ],
                         ),

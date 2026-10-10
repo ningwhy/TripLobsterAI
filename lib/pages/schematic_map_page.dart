@@ -197,7 +197,7 @@ class _SchPainter extends CustomPainter {
     _area = Rect.fromLTRB(w * 0.07, h * 0.16, w * 0.93, h * 0.84);
 
     // 1. 羊皮纸背景
-    canvas.drawRect(Offset.zero & size, Paint()..shader = LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_bgTop, _bgBottom]).createShader(Offset.zero & size));
+    canvas.drawRect(Offset.zero & size, Paint()..shader = const LinearGradient(begin: Alignment.topCenter, end: Alignment.bottomCenter, colors: [_bgTop, _bgBottom]).createShader(Offset.zero & size));
     // 边框（双线）
     _frame(canvas, size);
 
@@ -296,8 +296,8 @@ class _SchPainter extends CustomPainter {
     )..layout();
     final rect = Rect.fromCenter(center: center, width: tp.width + 14, height: 18);
     final rrect = RRect.fromRectAndRadius(rect, const Radius.circular(9));
-    canvas.drawRRect(rrect, Paint()..color = Colors.white.withOpacity(0.94));
-    canvas.drawRRect(rrect, Paint()..color = color.withOpacity(0.65)..style = PaintingStyle.stroke..strokeWidth = 1.2);
+    canvas.drawRRect(rrect, Paint()..color = Colors.white.withValues(alpha: 0.94));
+    canvas.drawRRect(rrect, Paint()..color = color.withValues(alpha: 0.65)..style = PaintingStyle.stroke..strokeWidth = 1.2);
     tp.paint(canvas, rect.topLeft + Offset(7, (rect.height - tp.height) / 2));
   }
 

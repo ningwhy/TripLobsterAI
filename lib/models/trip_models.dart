@@ -176,7 +176,7 @@ class TripDay {
   String get formattedTime {
     final hours = totalMinutes ~/ 60;
     final mins = totalMinutes % 60;
-    return '${hours}小时${mins > 0 ? "${mins}分钟" : ""}';
+    return '$hours小时${mins > 0 ? "$mins分钟" : ""}';
   }
 
   Map<String, dynamic> toJson() => {

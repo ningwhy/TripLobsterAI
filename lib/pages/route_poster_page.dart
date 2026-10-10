@@ -56,7 +56,7 @@ class _RoutePosterPageState extends State<RoutePosterPage> {
       final routes = <_DayRoute>[];
       for (final day in widget.trip.days) {
         final locs = day.locations.where((l) => l.latitude != null && l.longitude != null).toList();
-        if (locs.length < 1) continue;
+        if (locs.isEmpty) continue;
         final r = _DayRoute(day.dayNumber)..locations.addAll(locs);
         if (locs.length >= 2) {
           final waypoints = locs.map((l) => [l.longitude!, l.latitude!]).toList();
@@ -198,7 +198,7 @@ class _RoutePosterPageState extends State<RoutePosterPage> {
         color: isHotel ? Colors.white : color,
         shape: BoxShape.circle,
         border: Border.all(color: Colors.white, width: 2),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.4), blurRadius: 4)],
+        boxShadow: [BoxShadow(color: Colors.black.withValues(alpha: 0.4), blurRadius: 4)],
       ),
       child: Center(
         child: Icon(
@@ -220,7 +220,7 @@ class _RoutePosterPageState extends State<RoutePosterPage> {
       child: Container(
         padding: const EdgeInsets.fromLTRB(14, 10, 16, 12),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.65),
+          color: Colors.black.withValues(alpha: 0.65),
           borderRadius: BorderRadius.circular(12),
           border: Border.all(color: Colors.white24),
         ),
@@ -246,7 +246,7 @@ class _RoutePosterPageState extends State<RoutePosterPage> {
       child: Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-          color: Colors.black.withOpacity(0.55),
+          color: Colors.black.withValues(alpha: 0.55),
           borderRadius: BorderRadius.circular(10),
         ),
         child: Wrap(

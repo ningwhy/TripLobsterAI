@@ -23,7 +23,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
   DateTime _endDate = DateTime.now().add(const Duration(days: 2));
   List<Location> _locations = [];
   // 存储每段路程的路线信息
-  Map<String, AmapRoute?> _routeInfo = {};
+  final Map<String, AmapRoute?> _routeInfo = {};
   TripMode _tripMode = TripMode.pureTransit;
   TransportType _intercityPref = TransportType.flight;
   TransportType _intraCityPref = TransportType.taxi;
@@ -549,7 +549,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
             width: 40,
             height: 40,
             decoration: BoxDecoration(
-              color: _getTypeColor(location.type).withOpacity(0.1),
+              color: _getTypeColor(location.type).withValues(alpha: 0.1),
               borderRadius: BorderRadius.circular(8),
             ),
             child: Icon(
@@ -776,14 +776,14 @@ class _TripCreatePageState extends State<TripCreatePage> {
   /// 格式化时长显示
   String _formatDuration(int minutes) {
     if (minutes < 60) {
-      return '${minutes}分钟';
+      return '$minutes分钟';
     } else {
       final hours = minutes ~/ 60;
       final mins = minutes % 60;
       if (mins == 0) {
-        return '${hours}小时';
+        return '$hours小时';
       }
-      return '${hours}小时${mins}分钟';
+      return '$hours小时$mins分钟';
     }
   }
 

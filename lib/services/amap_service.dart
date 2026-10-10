@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
 import '../config/app_config.dart';
 
@@ -38,7 +39,7 @@ class AmapService {
       }
       return [];
     } catch (e) {
-      print('搜索失败: $e');
+      debugPrint('搜索失败: $e');
       return [];
     }
   }
@@ -65,7 +66,7 @@ class AmapService {
       }
       return null;
     } catch (e) {
-      print('获取详情失败: $e');
+      debugPrint('获取详情失败: $e');
       return null;
     }
   }
@@ -97,7 +98,7 @@ class AmapService {
       }
       return null;
     } catch (e) {
-      print('路线规划失败: $e');
+      debugPrint('路线规划失败: $e');
       return null;
     }
   }
@@ -130,7 +131,7 @@ class AmapService {
       }
       return null;
     } catch (e) {
-      print('公交路线规划失败: $e');
+      debugPrint('公交路线规划失败: $e');
       return null;
     }
   }
@@ -160,7 +161,7 @@ class AmapService {
       }
       return null;
     } catch (e) {
-      print('步行路线规划失败: $e');
+      debugPrint('步行路线规划失败: $e');
       return null;
     }
   }
@@ -187,7 +188,7 @@ class AmapService {
       }
       return null;
     } catch (e) {
-      print('地理编码失败: $e');
+      debugPrint('地理编码失败: $e');
       return null;
     }
   }
@@ -212,7 +213,7 @@ class AmapService {
       }
       return null;
     } catch (e) {
-      print('逆地理编码失败: $e');
+      debugPrint('逆地理编码失败: $e');
       return null;
     }
   }
@@ -306,16 +307,16 @@ class AmapRoute {
     final hours = duration ~/ 3600;
     final mins = (duration % 3600) ~/ 60;
     if (hours > 0) {
-      return '${hours}小时${mins}分钟';
+      return '$hours小时$mins分钟';
     }
-    return '${mins}分钟';
+    return '$mins分钟';
   }
 
   String get distanceText {
     if (distance >= 1000) {
       return '${(distance / 1000).toStringAsFixed(1)}公里';
     }
-    return '${distance}米';
+    return '$distance米';
   }
 }
 
@@ -599,7 +600,7 @@ Future<IntercityTransitResult?> getIntercityTransit({
       }
       return null;
     } catch (e) {
-      print('跨城公共交通规划失败: $e');
+      debugPrint('跨城公共交通规划失败: $e');
       return null;
     }
   }

@@ -35,7 +35,7 @@ class DayCostBar extends StatelessWidget {
         children: [
           // 金额行：空态只出文案、**不出金额**（不显示 ¥0、不显示 ¥—）
           cost.isEmpty
-              ? Text(
+              ? const Text(
                   PreviewStrings.dayCostEmpty,
                   textAlign: TextAlign.right,
                   style: PreviewText.costLabel,
@@ -44,7 +44,7 @@ class DayCostBar extends StatelessWidget {
                   textAlign: TextAlign.right,
                   text: TextSpan(
                     children: [
-                      TextSpan(
+                      const TextSpan(
                         text: '${PreviewStrings.dayCostTitle} ',
                         style: PreviewText.costLabel,
                       ),

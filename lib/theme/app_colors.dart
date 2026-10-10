@@ -33,7 +33,7 @@ class AppColors {
 
   static List<BoxShadow> get cardShadow => [
         BoxShadow(
-          color: const Color(0xFF2E4A38).withOpacity(0.05),
+          color: const Color(0xFF2E4A38).withValues(alpha: 0.05),
           blurRadius: 12,
           offset: const Offset(0, 3),
         ),

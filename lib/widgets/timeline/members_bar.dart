@@ -27,7 +27,7 @@ class MembersBar extends StatelessWidget {
                 padding: const EdgeInsets.only(right: 6),
                 child: CircleAvatar(
                   radius: 13,
-                  backgroundColor: PreviewColors.teal.withOpacity(0.85),
+                  backgroundColor: PreviewColors.teal.withValues(alpha: 0.85),
                   child: Text(
                     m.name.isNotEmpty ? m.name[0] : '👤',
                     style: const TextStyle(fontSize: 11, color: Colors.white),
@@ -38,7 +38,7 @@ class MembersBar extends StatelessWidget {
             onTap: onInvite,
             child: CircleAvatar(
               radius: 13,
-              backgroundColor: Colors.white.withOpacity(0.14),
+              backgroundColor: Colors.white.withValues(alpha: 0.14),
               child: const Icon(Icons.add, size: 14, color: Colors.white70),
             ),
           ),

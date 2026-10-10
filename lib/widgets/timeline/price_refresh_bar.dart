@@ -48,9 +48,9 @@ class PriceRefreshBar extends StatelessWidget {
       onTap: explainDisabled
           ? () {
               ScaffoldMessenger.of(context).showSnackBar(
-                SnackBar(
-                  content: const Text(PreviewStrings.priceOfflineNote),
-                  duration: const Duration(seconds: 3),
+                const SnackBar(
+                  content: Text(PreviewStrings.priceOfflineNote),
+                  duration: Duration(seconds: 3),
                 ),
               );
             }

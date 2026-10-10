@@ -276,7 +276,7 @@ class TripMembersPage extends StatelessWidget {
             Container(
               padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
               decoration: BoxDecoration(
-                color: const Color(0xFF4A90D9).withOpacity(0.1),
+                color: const Color(0xFF4A90D9).withValues(alpha: 0.1),
                 borderRadius: BorderRadius.circular(4),
               ),
               child: const Text(
@@ -334,7 +334,7 @@ class TripMembersPage extends StatelessWidget {
             height: 32,
             decoration: BoxDecoration(
               color: isAdmin
-                  ? const Color(0xFF4A90D9).withOpacity(0.1)
+                  ? const Color(0xFF4A90D9).withValues(alpha: 0.1)
                   : Colors.grey[100],
               borderRadius: BorderRadius.circular(8),
             ),

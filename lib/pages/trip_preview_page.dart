@@ -222,8 +222,11 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
       WidgetsBinding.instance.addPostFrameCallback((_) {
         if (!mounted) return;
         final t = _anchor.targetFor(i);
-        if (t != null) _animateTo(t, i);
-        else _anchor.isProgrammatic = false;
+        if (t != null) {
+          _animateTo(t, i);
+        } else {
+          _anchor.isProgrammatic = false;
+        }
       });
       return;
     }
@@ -547,10 +550,10 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           const SizedBox(height: 6),
           // 【常驻副行】与分组尾同口径：本卡**只含服务端那几项**，不含餐饮/交通参考价。
           // 明写出来，避免用户把它与「当日已计价」当成同一口径相加。
-          Text(PreviewStrings.priceScope, style: PreviewText.costLabel),
+          const Text(PreviewStrings.priceScope, style: PreviewText.costLabel),
           const SizedBox(height: 6),
-          Text(TripCost.scopeConflictNote,
-              style: const TextStyle(fontSize: 11, color: PreviewColors.priceRedText)),
+          const Text(TripCost.scopeConflictNote,
+              style: TextStyle(fontSize: 11, color: PreviewColors.priceRedText)),
         ],
       ),
     );
@@ -567,7 +570,7 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
       ),
       child: Column(
         children: [
-          Icon(Icons.calendar_month_outlined, size: 36, color: PreviewColors.dim),
+          const Icon(Icons.calendar_month_outlined, size: 36, color: PreviewColors.dim),
           const SizedBox(height: 8),
           const Text('这一天还没有安排', style: TextStyle(fontSize: 13, color: PreviewColors.sub)),
           const SizedBox(height: 10),
@@ -591,7 +594,7 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
         decoration: BoxDecoration(
           color: color,
           shape: BoxShape.circle,
-          boxShadow: [BoxShadow(color: color.withOpacity(0.35), blurRadius: 10, offset: const Offset(0, 4))],
+          boxShadow: [BoxShadow(color: color.withValues(alpha: 0.35), blurRadius: 10, offset: const Offset(0, 4))],
         ),
         child: Icon(icon, color: Colors.white, size: 24),
       ),
@@ -736,8 +739,8 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(20, 16, 20, 4),
+            const Padding(
+              padding: EdgeInsets.fromLTRB(20, 16, 20, 4),
               child: Text('换一家（AI 已按位置/口碑/星级/预算筛过）',
                   style: TextStyle(fontSize: 12, color: PreviewColors.sub)),
             ),

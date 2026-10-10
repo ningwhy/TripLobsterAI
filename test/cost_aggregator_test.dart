@@ -210,7 +210,7 @@ void main() {
     });
 
     test('无候选且 name 不符 → 拒绝', () {
-      final q = const PriceQuote(name: '别的店', candidates: []);
+      const q = PriceQuote(name: '别的店', candidates: []);
       expect(src.matchesSubject(q, '某餐厅'), isFalse);
     });
   });

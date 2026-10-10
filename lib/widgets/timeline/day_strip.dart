@@ -97,7 +97,7 @@ class DayStrip extends StatelessWidget {
               maxLines: 1,
               overflow: TextOverflow.ellipsis,
               style: PreviewText.dayNumSub.copyWith(
-                color: selected ? Colors.white.withOpacity(0.9) : PreviewColors.sub,
+                color: selected ? Colors.white.withValues(alpha: 0.9) : PreviewColors.sub,
               ),
             ),
           ],

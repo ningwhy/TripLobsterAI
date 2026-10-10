@@ -238,7 +238,7 @@ class _TransportSelectModalState extends State<TransportSelectModal> with Single
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: isSelected ? const Color(0xFF4A90D9).withOpacity(0.1) : Colors.white,
+              color: isSelected ? const Color(0xFF4A90D9).withValues(alpha: 0.1) : Colors.white,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: isSelected ? const Color(0xFF4A90D9) : Colors.grey[300]!,
@@ -357,7 +357,7 @@ class _TransportSelectModalState extends State<TransportSelectModal> with Single
             margin: const EdgeInsets.only(bottom: 12),
             padding: const EdgeInsets.all(16),
             decoration: BoxDecoration(
-              color: isSelected ? const Color(0xFF4A90D9).withOpacity(0.1) : Colors.white,
+              color: isSelected ? const Color(0xFF4A90D9).withValues(alpha: 0.1) : Colors.white,
               borderRadius: BorderRadius.circular(12),
               border: Border.all(
                 color: isSelected ? const Color(0xFF4A90D9) : Colors.grey[300]!,

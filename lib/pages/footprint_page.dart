@@ -50,7 +50,7 @@ class FootprintPage extends StatelessWidget {
                     borderRadius: BorderRadius.circular(16),
                     boxShadow: [
                       BoxShadow(
-                        color: Colors.black.withOpacity(0.1),
+                        color: Colors.black.withValues(alpha: 0.1),
                         blurRadius: 10,
                       ),
                     ],
@@ -149,7 +149,7 @@ class FootprintPage extends StatelessWidget {
                 shape: BoxShape.circle,
                 boxShadow: [
                   BoxShadow(
-                    color: const Color(0xFF4A90D9).withOpacity(0.6),
+                    color: const Color(0xFF4A90D9).withValues(alpha: 0.6),
                     blurRadius: 10,
                     spreadRadius: 4,
                   ),
@@ -304,7 +304,7 @@ class _FootprintMapPainter extends CustomPainter {
     // 绘制连接线
     if (footprints.length > 1) {
       final linePaint = Paint()
-        ..color = const Color(0xFF4A90D9).withOpacity(0.5)
+        ..color = const Color(0xFF4A90D9).withValues(alpha: 0.5)
         ..strokeWidth = 1
         ..style = PaintingStyle.stroke;
 
