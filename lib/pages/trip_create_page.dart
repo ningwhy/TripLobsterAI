@@ -101,6 +101,9 @@ class _TripCreatePageState extends State<TripCreatePage> {
                 ),
                 trailing: const Icon(Icons.edit, color: Colors.white70, size: 18),
                 onTap: () async {
+                  // 【async gap】`TripProvider` 在 `await`（地点搜索页）之前捕获：
+                  // 搜索页停留期间本页面可能被 pop，届时的 `context` 已失效。
+                  final provider = context.read<TripProvider>();
                   final result = await Navigator.push<Location>(
                     context,
                     MaterialPageRoute(builder: (_) => const LocationSearchPage()),
@@ -115,7 +118,7 @@ class _TripCreatePageState extends State<TripCreatePage> {
                       city: result.city,
                       district: result.district,
                     );
-                    await context.read<TripProvider>().setHomeLocation(newHome);
+                    await provider.setHomeLocation(newHome);
                   }
                 },
               ),
@@ -157,6 +160,16 @@ class _TripCreatePageState extends State<TripCreatePage> {
             margin: const EdgeInsets.only(top: 8),
             child: OutlinedButton.icon(
               onPressed: () async {
+                // 【async gap】两件事都必须在 `await` 之前完成：
+                //
+                // 1. `ScaffoldMessenger.of(context)` 提前捕获 —— messenger 挂在
+                //    MaterialApp 上（远高于本页），本页被 pop 后它依然有效；
+                //    而 await 之后再 `ScaffoldMessenger.of(context)`，若那时
+                //    context 已失效就会抛异常。
+                // 2. await 之后先 `if (!mounted) return;` 再 `setState` ——
+                //    旧写法 `setState` 在任何守卫**之前**执行，页面已销毁时
+                //    直接抛 setState-after-dispose，是本处最严重的一条。
+                final messenger = ScaffoldMessenger.of(context);
                 final result = await Navigator.push<Map<String, dynamic>>(
                   context,
                   MaterialPageRoute(
@@ -167,13 +180,15 @@ class _TripCreatePageState extends State<TripCreatePage> {
                     ),
                   ),
                 );
+                // 页面已销毁时不再改动本页面 State（用户偏好已带回，属预期行为）
+                if (!mounted) return;
                 if (result != null) {
                   setState(() {
                     _tripMode = result['tripMode'] ?? _tripMode;
                     _intercityPref = result['bigTransport'] ?? _intercityPref;
                     _intraCityPref = result['smallTransport'] ?? _intraCityPref;
                   });
-                  ScaffoldMessenger.of(context).showSnackBar(
+                  messenger.showSnackBar(
                     const SnackBar(content: Text('交通偏好已设置')),
                   );
                 }

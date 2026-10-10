@@ -55,17 +55,33 @@ class _CloudSettingsPageState extends State<CloudSettingsPage> {
       _showMsg('请输入用户名和密码', isError: true);
       return;
     }
+    // 【async gap】`TripProvider` 必须在**第一个 await 之前**捕获。
+    //
+    // 原写法 `await context.read<TripProvider>().syncNow()` 把 `context.read` 放在
+    // 登录 `await` 之后 —— 登录期间用户把本页 pop 掉，`context` 已失效，
+    // `context.read` 会抛 "Looking up a deactivated widget's ancestor is unsafe"。
+    //
+    // 原有的 `if (!mounted) return;` 位于 await **之后**，只保护紧随其后的 `_showMsg`，
+    // 救不了上一行的 `context.read`：守卫偏了一行，等于没防。
+    //
+    // `provider` 由 Provider 树根持有、不依赖本页存活，提前取是安全的；
+    // 真正需要 `mounted` 的是 await 之后操作本页面 State 的那几步。
+    // 与同文件 `_sync()` 写法保持一致。
+    final provider = context.read<TripProvider>();
     try {
       if (_isRegister) {
         await ApiClient.register(user, pass);
       } else {
         await ApiClient.login(user, pass);
       }
+      // 页面已销毁时不再改动本页面 State（此时登录已在后台完成，属预期行为）
+      if (!mounted) return;
       _showMsg(_isRegister ? '注册成功，正在同步…' : '登录成功，正在同步…');
-      final err = await context.read<TripProvider>().syncNow();
+      final err = await provider.syncNow();
       if (!mounted) return;
       _showMsg(err ?? '同步完成 ✓', isError: err != null);
     } on ApiException catch (e) {
+      if (!mounted) return;
       _showMsg(e.message, isError: true);
     }
   }
