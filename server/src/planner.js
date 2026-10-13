@@ -27,11 +27,609 @@ function haversineKm(a, b) {
   return 2 * R * Math.asin(Math.sqrt(s));
 }
 
-function parseOpenTime(poi) {
-  const raw = poi.biz_ext?.opentime || poi.biz_ext?.open_time || '';
-  const m = String(raw).match(/(\d{1,2}:\d{2})\s*[-—~至]\s*(\d{1,2}:\d{2})/);
-  if (!m) return { open: null, close: null };
-  return { open: m[1], close: m[2] };
+// ===========================================================================
+// 日期感知营业时间解析（SR-OH1 / T02）
+// ---------------------------------------------------------------------------
+// 事实来源只有高德原文：biz_ext.opentime2 → biz_ext.open_time（仅简单格式兼容）。
+// 旧实现的两个致命问题（FX-OH 探针实测）：
+//   1. 读 `biz_ext.opentime` —— 该键**恒不存在**（实测 undefined）；
+//   2. `open_time` 无值时常为空数组 `[]`，JS 里 truthy 且 String([])===''。
+// 另：营业时间不是单个时间段，而是带条件的自然语言（季节区间 / 星期 / 停止入场 /
+// 闭馆日 / 多时段 / 24 小时）。只取"第一个匹配"会在多时段原文上产生**假阳性**
+// （"11:00-14:00 16:00-22:00" → close=14:00 → 用户 19:00 到被误报"已打烊"）。
+//
+// 多时段的正确解法是**返回多段**，不是放弃：
+//   · 多时段 → open/close 强制为 null，只由 `segments` 承载（结构性杜绝假阳性）；
+//   · 判据从"落在 [open, close] 内"改为"落在 segments 中**任一段**内"；
+//   · 餐饮 open_time 大量是多时段格式，放弃会把覆盖率最高的那类直接归零。
+// 三铁律：不估算、不编造、不兜底填充 —— 任何不确定一律五字段全 null 且 segments: []。
+// ===========================================================================
+
+/** 星期汉字 → ISO 星期序号（周一=1 … 周日=7）。 */
+const WEEKDAY_CHAR = { 一: 1, 二: 2, 三: 3, 四: 4, 五: 5, 六: 6, 日: 7, 天: 7 };
+
+/** 各月最大日（2 月按 29 计，用于"月末"包容，避免 2/28 边界被误判为区间残缺）。 */
+const MONTH_LAST_DAY = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+/** 季节/月份提示词：出现但区间端点不完整 → 保守放弃（设计 §1.2.3）。 */
+const SEASON_HINT_RE = /月|旺季|淡季|平季/;
+/** 明确关闭词：只有命中其一才允许产出 closedOnThisDate=true。 */
+const CLOSE_RE = /关闭|闭馆|闭园|不开放|停业/;
+/** 24 小时/全天：可确定性判定 → 识别为 00:00-24:00 单段，绝不解析成 00:00-00:00。 */
+const ALL_DAY_RE = /24\s*小时|全天开放|全天营业|通宵/;
+/** 全天开放的标准表示（24:00 表示"到当日结束"，toMin 得 1440）。 */
+const ALL_DAY_SEGMENT = Object.freeze({ open: '00:00', close: '24:00', lastEntry: null });
+/** 节假日例外：需要外部权威节假日日历才能判定 → 放弃（设计 A-3）。 */
+const HOLIDAY_RE = /法定节假日|法定节日|节假日|节日/;
+const HOLIDAY_EXCEPT_RE = /除外|正常开放|照常开放|正常营业/;
+/** 另行通知类：属于非确定性语法 → 放弃。 */
+const NOTICE_RE = /以官方通知为准|另行通知|以公告为准|以景区公告为准|以官方公告为准|以现场公告为准/;
+/** 营业时间段 HH:mm-HH:mm（分隔符在归一后统一为 - / 至 / ~）。 */
+const WINDOW_RE = /(\d{1,2})\s*:\s*(\d{2})\s*(?:至|到|-|~)\s*(\d{1,2})\s*:\s*(\d{2})/g;
+/** 停止入场（时刻在前）：16:00停止检票 / 16:30停止入馆 / 17:00 停止入园。 */
+const LAST_ENTRY_PREFIX_RE = /(\d{1,2})\s*:\s*(\d{2})\s*(?:停止|截止)\s*(?:检票|入馆|入园|入场|售票|参观|接待|进入)?/g;
+/** 停止入场（时刻在后）：最晚进入15:00 / 最后入场 16:00。 */
+const LAST_ENTRY_SUFFIX_RE = /(?:最晚|最后|末次)\s*(?:进入|入场|入园|入馆|检票|取票)\s*(\d{1,2})\s*:\s*(\d{2})/g;
+/** 星期令牌：周二 / 星期日 / 礼拜六。 */
+const WEEKDAY_TOKEN_RE = /(?:周|星期|礼拜)\s?([一二三四五六日天])/g;
+/** 日期区间：M月D日 至 [次年] M月D日。 */
+const MD_RANGE_RE = /(\d{1,2})\s*月\s*(\d{1,2})\s*日?\s*(?:至|到|-|~)\s*(次年|明年|翌年)?\s*(\d{1,2})\s*月\s*(\d{1,2})\s*日?/g;
+/** 月份区间：M月至M月 / 3-10月（含全角破折号，归一后为 -）。 */
+const MM_RANGE_RE = /(\d{1,2})\s*(?:月)?\s*(?:至|到|-|~)\s*(\d{1,2})\s*月/g;
+/**
+ * 无"月/日"字的日期区间：**03-16至10-31**、**09/25-09/27**、**01/01-09/24**（高德实测大量使用）。
+ * 不支持会把"03-16至10-31"当成全年生效 → 与另一季节段同时命中，也会把"周一全天不开放"
+ * 误判成全年闭馆（苏州博物馆实测：不加这条会**每一天都被判闭馆**，属高危假阳性）。
+ */
+const SLASH_MD_RANGE_RE = /(\d{1,2})[-/](\d{1,2})\s*(?:至|到|-|~)\s*(\d{1,2})[-/](\d{1,2})/g;
+/** 具名节假日（春节/端午/国庆…）：没有权威节假日日历就无法判定是否命中 → 按未知处理。 */
+const HOLIDAY_NAME_RE = /春节|除夕|元宵|元旦|清明|劳动节|端午|中秋|国庆|教师节|儿童节|妇女节/;
+
+/**
+ * 解析失败的统一空对象（契约：五字段全 null **且 segments 为空数组**）。
+ * `reason` 仅用于服务端诊断与探针统计，**不进入客户端 payload**。
+ * @param {string} reason 失败原因枚举
+ * @returns {{open: null, close: null, lastEntry: null, closedOnThisDate: null,
+ *            openHoursRaw: null, segments: Array, reason: string}}
+ */
+export function emptyOpenHours(reason) {
+  return { open: null, close: null, lastEntry: null, closedOnThisDate: null, openHoursRaw: null, segments: [], reason };
+}
+
+/** 两位补零时刻：7:30 → 07:30。 */
+function padClock(h, m) {
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * 收集某个全局正则的全部匹配（每次新建 RegExp，避免 lastIndex 跨调用串味）。
+ * @param {RegExp} re 带 g 标志的正则
+ * @param {string} text 待匹配文本（已归一）
+ * @returns {RegExpExecArray[]} 全部匹配
+ */
+function collect(re, text) {
+  const rx = new RegExp(re.source, re.flags.includes('g') ? re.flags : `${re.flags}g`);
+  const out = [];
+  let m;
+  rx.lastIndex = 0;
+  while ((m = rx.exec(text)) !== null) {
+    out.push(m);
+    if (m[0] === '') rx.lastIndex += 1; // 防御零宽匹配死循环
+  }
+  return out;
+}
+
+/**
+ * 文本归一（**严格等长**，保证下标可原样切片回原文）。
+ * 全角数字/标点 → 半角；全角破折号（－−–—―）→ `-`；全角空格 → 空格。
+ * @param {string} s 原文
+ * @returns {string} 等长归一文本
+ */
+function normalizeOpenHoursText(s) {
+  return String(s)
+    .replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0))
+    .replace(/：/g, ':')
+    .replace(/，/g, ',')
+    .replace(/；/g, ';')
+    .replace(/（/g, '(')
+    .replace(/）/g, ')')
+    .replace(/～/g, '~')
+    .replace(/[－−–—―]/g, '-')
+    .replace(/　/g, ' ');
+}
+
+/**
+ * 按 `；;。\n，,` 切分子句，并保留每个子句在原文中的起止下标。
+ * 两处例外不切分，避免把确定性语法切坏：
+ *   1. 括号内的逗号（如"（周一,周二闭馆）"）；
+ *   2. 星期并集的逗号（如"周一,周四至周日"）。
+ * @param {string} original 原文
+ * @returns {{raw: string, text: string}[]} 子句列表（raw 为原文切片，text 为归一文本）
+ */
+function splitOpenHoursClauses(original) {
+  const norm = normalizeOpenHoursText(original);
+  const spans = [];
+  let start = 0;
+  let depth = 0;
+  for (let i = 0; i < norm.length; i++) {
+    const ch = norm[i];
+    if (ch === '(') depth += 1;
+    else if (ch === ')') depth = Math.max(0, depth - 1);
+    const isHard = ch === ';' || ch === '。' || ch === '\n';
+    const isComma = ch === ',';
+    if (!isHard && !isComma) continue;
+    if (isComma) {
+      if (depth > 0) continue;
+      const before = norm.slice(start, i).trimEnd();
+      const after = norm.slice(i + 1);
+      // 星期并集：前段以 周X 结尾且后段以 周X 开头 → 不切（"周一,周四至周日"）
+      if (/周\s?[一二三四五六日天]$/.test(before) && /^\s*周\s?[一二三四五六日天]/.test(after)) continue;
+      // 月份/日期区间并集：前段以 月/日 结尾且后段以 数字+月/日 开头 → 不切
+      // 实测原文：「1月至3月,11月至12月 周一至周日 06:30-19:00」（颐和园）。
+      // 若在此切分，"1月至3月" 会丢掉挂在后段的营业时间，造成**本可解析却解析不出**的漏报。
+      if (/[月日]$/.test(before) && /^\s*\d{1,2}\s*[月日]/.test(after)) continue;
+    }
+    spans.push([start, i]);
+    start = i + 1;
+  }
+  spans.push([start, norm.length]);
+  const out = [];
+  for (const [s, e] of spans) {
+    const raw = original.slice(s, e).trim();
+    if (!raw) continue;
+    out.push({ raw, text: norm.slice(s, e).trim() });
+  }
+  return out;
+}
+
+/**
+ * 定位关闭词所在的括号组，把子句拆成「关闭部分」与「正文」。
+ *
+ * 实测原文里关闭词有两种位置，语义完全不同：
+ *   · 不在括号内 —— "周一全天关闭(法定节假日除外)"：整句就是关闭规则；
+ *   · 在括号内   —— "夜场18:30-21:00(周一闭园)"：括号只是**该场次**的关闭日，
+ *                   正文仍是营业段。若把 周一 当成营业星期，会把夜场误判成"只在周一开"。
+ * @param {string} text 子句（已归一）
+ * @returns {{closePart: string|null, body: string}} closePart 为 null 表示关闭词不在括号内
+ */
+function splitClosePart(text) {
+  const m = CLOSE_RE.exec(text);
+  if (!m) return { closePart: null, body: text };
+  const k = m.index;
+  // 向前找未闭合的 '('
+  let open = -1;
+  for (let i = k - 1; i >= 0; i--) {
+    if (text[i] === ')') break;
+    if (text[i] === '(') { open = i; break; }
+  }
+  if (open === -1) return { closePart: null, body: text };
+  // 向后找匹配的 ')'
+  let close = -1;
+  for (let i = k; i < text.length; i++) {
+    if (text[i] === ')') { close = i; break; }
+    if (text[i] === '(') break;
+  }
+  if (close === -1) return { closePart: null, body: text };
+  const closePart = text.slice(open, close + 1);
+  const body = (text.slice(0, open) + ' ' + text.slice(close + 1)).trim();
+  return { closePart, body: body || text };
+}
+
+/**
+ * 解析星期集合。
+ * @param {string} text 子句（已归一）
+ * @returns {Set<number>|null} 1..7 的集合；null = 未限定星期（全周）
+ */
+function parseWeekdaySet(text) {
+  const tokens = collect(WEEKDAY_TOKEN_RE, text).map((m) => ({
+    value: WEEKDAY_CHAR[m[1]],
+    start: m.index,
+    end: m.index + m[0].length,
+  }));
+  if (!tokens.length) return null;
+  const set = new Set();
+  let i = 0;
+  while (i < tokens.length) {
+    const cur = tokens[i];
+    const next = tokens[i + 1];
+    if (next) {
+      const gap = text.slice(cur.end, next.start);
+      if (/^\s*(?:至|到|-|~)\s*$/.test(gap)) {
+        // 周X至周Y：循环展开（支持跨周末，如 周六至周一）
+        for (let v = cur.value; ; v = (v % 7) + 1) {
+          set.add(v);
+          if (v === next.value) break;
+        }
+        i += 2;
+        continue;
+      }
+    }
+    set.add(cur.value);
+    i += 1;
+  }
+  return set;
+}
+
+/**
+ * 月日 → 可比大小的序（月*100+日）。
+ * @param {number} m 月
+ * @param {number} d 日
+ * @returns {number} 序值
+ */
+function monthDayOrdinal(m, d) {
+  return m * 100 + d;
+}
+
+/**
+ * 构建区间；跨年（结束早于开始，或显式 次年）拆成两段。
+ * @param {number} m1 始月
+ * @param {number} d1 始日
+ * @param {number} m2 终月
+ * @param {number} d2 终日
+ * @param {boolean} cross 是否显式跨年
+ * @returns {{status: string, ranges: number[][]}}
+ */
+function buildDateRanges(m1, d1, m2, d2, cross) {
+  const s = monthDayOrdinal(m1, d1);
+  const e = monthDayOrdinal(m2, d2);
+  if (cross || e < s) return { status: 'ok', ranges: [[s, 1231], [101, e]] };
+  return { status: 'ok', ranges: [[s, e]] };
+}
+
+/**
+ * 解析日期/月份区间。
+ * @param {string} text 子句（已归一）
+ * @returns {{status: 'none'|'ok'|'incomplete'|'ambiguous', ranges: number[][]}}
+ */
+function parseDateRange(text) {
+  // 区间并集：多个区间之间只隔 `,`、`、`、`和/及/与` 时视为**并集**，端点明确即可判定。
+  // 实测原文：「1月至3月,11月至12月 周一至周日 06:30-19:00」（颐和园）。
+  // 若判为 ambiguous 会白白丢掉这类可确定性解析的样本。
+  const unionOf = (hits, toRange) => {
+    if (hits.length === 1) return toRange(hits[0]);
+    for (let i = 0; i < hits.length - 1; i++) {
+      const gap = text.slice(hits[i].index + hits[i][0].length, hits[i + 1].index);
+      if (!/^\s*(?:,|、|和|及|与)\s*$/.test(gap)) return null; // 不是并集 → 真歧义
+    }
+    const ranges = [];
+    for (const h of hits) {
+      const r = toRange(h);
+      if (!r || r.status !== 'ok') return null;
+      ranges.push(...r.ranges);
+    }
+    return { status: 'ok', ranges };
+  };
+
+  const mdHits = collect(MD_RANGE_RE, text);
+  if (mdHits.length) {
+    const r = unionOf(mdHits, (h) => {
+      const m1 = Number(h[1]);
+      const d1 = Number(h[2]);
+      const m2 = Number(h[4]);
+      const d2 = Number(h[5]);
+      const cross = Boolean(h[3]);
+      const ok1 = m1 >= 1 && m1 <= 12 && d1 >= 1 && d1 <= MONTH_LAST_DAY[m1 - 1];
+      const ok2 = m2 >= 1 && m2 <= 12 && d2 >= 1 && d2 <= MONTH_LAST_DAY[m2 - 1];
+      if (!ok1 || !ok2) return { status: 'incomplete', ranges: [] };
+      return buildDateRanges(m1, d1, m2, d2, cross);
+    });
+    return r || { status: 'ambiguous', ranges: [] };
+  }
+
+  // 无"月/日"字的日期区间（03-16至10-31 / 09/25-09/27）。
+  // 端点不合法的命中先过滤掉，避免把时间区间误当日期区间后判成 incomplete 而整条报废。
+  const slashHits = collect(SLASH_MD_RANGE_RE, text).filter((h) => {
+    const a = Number(h[1]);
+    const b = Number(h[2]);
+    const c = Number(h[3]);
+    const d = Number(h[4]);
+    const ok = (m, dd) => m >= 1 && m <= 12 && dd >= 1 && dd <= MONTH_LAST_DAY[m - 1];
+    return ok(a, b) && ok(c, d);
+  });
+  if (slashHits.length) {
+    const r = unionOf(slashHits, (h) => {
+      const m1 = Number(h[1]);
+      const d1 = Number(h[2]);
+      const m2 = Number(h[3]);
+      const d2 = Number(h[4]);
+      // 结束早于开始 → 跨年（如 11-01至03-15）
+      return buildDateRanges(m1, d1, m2, d2, false);
+    });
+    return r || { status: 'ambiguous', ranges: [] };
+  }
+
+  const mmHits = collect(MM_RANGE_RE, text);
+  if (mmHits.length) {
+    const r = unionOf(mmHits, (h) => {
+      const m1 = Number(h[1]);
+      const m2 = Number(h[2]);
+      if (m1 < 1 || m1 > 12 || m2 < 1 || m2 > 12) return { status: 'incomplete', ranges: [] };
+      // 月份区间：3–10月 = 3/1 起至 10 月最后一日
+      return buildDateRanges(m1, 1, m2, MONTH_LAST_DAY[m2 - 1], false);
+    });
+    return r || { status: 'ambiguous', ranges: [] };
+  }
+
+  return { status: SEASON_HINT_RE.test(text) ? 'incomplete' : 'none', ranges: [] };
+}
+
+/**
+ * 解析营业时间段（全部，供"多时段 → 放弃"判据使用）。
+ * @param {string} text 子句（已归一）
+ * @returns {{openText: string, closeText: string, openMin: number, closeMin: number, valid: boolean}[]}
+ */
+function parseTimeWindows(text) {
+  return collect(WINDOW_RE, text).map((m) => {
+    const oh = Number(m[1]);
+    const om = Number(m[2]);
+    const ch = Number(m[3]);
+    const cm = Number(m[4]);
+    // 24:00 只作为**收尾时刻**合法（实测"周一至周日 00:00-24:00"，广州长隆）
+    const valid = oh >= 0 && oh <= 23 && om >= 0 && om <= 59 &&
+        ch >= 0 && ch <= 24 && cm >= 0 && cm <= 59 && (ch < 24 || cm === 0);
+    return { openText: padClock(oh, om), closeText: padClock(ch, cm), openMin: oh * 60 + om, closeMin: ch * 60 + cm, valid };
+  });
+}
+
+/**
+ * 解析停止入场时刻（时刻在前与在后两种表达，去重）。
+ * @param {string} text 子句（已归一）
+ * @returns {{text: string, minutes: number, valid: boolean}[]}
+ */
+function parseLastEntries(text) {
+  const out = [];
+  for (const m of collect(LAST_ENTRY_PREFIX_RE, text)) {
+    const h = Number(m[1]);
+    const mi = Number(m[2]);
+    out.push({ text: padClock(h, mi), minutes: h * 60 + mi, valid: h >= 0 && h <= 23 && mi >= 0 && mi <= 59 });
+  }
+  for (const m of collect(LAST_ENTRY_SUFFIX_RE, text)) {
+    const h = Number(m[1]);
+    const mi = Number(m[2]);
+    out.push({ text: padClock(h, mi), minutes: h * 60 + mi, valid: h >= 0 && h <= 23 && mi >= 0 && mi <= 59 });
+  }
+  const seen = new Set();
+  return out.filter((x) => {
+    if (seen.has(x.text)) return false;
+    seen.add(x.text);
+    return true;
+  });
+}
+
+/**
+ * 单子句分析（纯函数，无副作用）。
+ * @param {string} text 子句（已归一）
+ * @returns {object} 子句特征
+ */
+function analyzeOpenHoursClause(text) {
+  const close = CLOSE_RE.test(text);
+  const { closePart, body } = splitClosePart(text);
+  // 关闭词在括号内 → 该星期是"这一段的关闭日"，不是营业星期（见 splitClosePart 注释）
+  const closeWeekdays = close ? (closePart ? parseWeekdaySet(closePart) : parseWeekdaySet(body)) : null;
+  const range = parseDateRange(body);
+  const windows = parseTimeWindows(body);
+  // 关闭词不在括号内、且本句带营业段时（如 "09:00-17:00 周一闭馆"），
+  // 星期令牌属于**关闭规则**而非营业星期 → 营业星期视为不限（否则会把周一之外全部误判为不开放）
+  const weekdays = close && !closePart && windows.length >= 1 ? null : parseWeekdaySet(body);
+  return {
+    close,
+    closeWeekdays,
+    // "周一全天关闭" 含"全天"但不是 24 小时营业，必须先排除关闭子句
+    allDay: !close && ALL_DAY_RE.test(body),
+    rangeStatus: range.status,
+    ranges: range.ranges,
+    weekdays,
+    windows,
+    lastEntries: parseLastEntries(body),
+    holidayExcept: HOLIDAY_RE.test(text) && HOLIDAY_EXCEPT_RE.test(text),
+    holidayNamed: HOLIDAY_NAME_RE.test(text),
+    notice: NOTICE_RE.test(text),
+  };
+}
+
+/**
+ * 校验 ISO 日期并给出（UTC 基准的）星期与月日序。
+ * @param {string|null} iso yyyy-MM-dd
+ * @returns {{year: number, month: number, day: number, weekday: number, md: number}|null}
+ */
+function parseIsoDate(iso) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso == null ? '' : iso).trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const dt = new Date(Date.UTC(y, mo - 1, d));
+  // 拒绝 2026-02-30 这类会被 Date 静默进位的非法日期
+  if (dt.getUTCFullYear() !== y || dt.getUTCMonth() !== mo - 1 || dt.getUTCDate() !== d) return null;
+  const dow = dt.getUTCDay();
+  return { year: y, month: mo, day: d, weekday: dow === 0 ? 7 : dow, md: monthDayOrdinal(mo, d) };
+}
+
+/**
+ * 取营业时间原文：优先非空字符串 `opentime2`，缺失才兼容简单 `open_time`。
+ * 数组（含空数组 `[]`）、空串、数字、对象一律视为**缺失**（拒绝数组 truthy 陷阱）。
+ * @param {object} poi 高德原始 POI 或已归一的 POI（含 _openHoursSource）
+ * @returns {string|null} 原文或 null
+ */
+export function openHoursSourceOf(poi) {
+  if (!poi || typeof poi !== 'object') return null;
+  if (typeof poi._openHoursSource === 'string' && poi._openHoursSource.trim() !== '') return poi._openHoursSource;
+  const be = poi.biz_ext;
+  if (be && typeof be === 'object') {
+    for (const key of ['opentime2', 'open_time']) {
+      const v = be[key];
+      if (typeof v === 'string' && v.trim() !== '') return v;
+    }
+  }
+  // 容错：个别上游把字段放在顶层
+  for (const key of ['opentime2', 'open_time']) {
+    const v = poi[key];
+    if (typeof v === 'string' && v.trim() !== '') return v;
+  }
+  return null;
+}
+
+/**
+ * POI 上是否存在营业时间键（哪怕值是 `[]`）—— 用于区分"无此字段"与"字段不是字符串"。
+ * @param {object} poi POI
+ * @returns {boolean} 是否存在键
+ */
+function hasOpenHoursKey(poi) {
+  if (!poi || typeof poi !== 'object') return false;
+  const be = poi.biz_ext;
+  if (be && typeof be === 'object' && ('opentime2' in be || 'open_time' in be)) return true;
+  return 'opentime2' in poi || 'open_time' in poi || '_openHoursSource' in poi;
+}
+
+/**
+ * 【SR-OH1】日期感知营业时间解析（纯函数，可单测）。
+ *
+ * 输入高德原始 POI（或已归一 POI）与目标日期 `yyyy-MM-dd`，输出：
+ *   open / close / lastEntry / closedOnThisDate / openHoursRaw / segments
+ *
+ * 多时段约定（**结构性防假阳性**）：
+ *   · 单时段 → open/close 有值，segments 长度 1；
+ *   · 多时段 → open/close **强制为 null**，只由 segments 承载，使调用方不可能
+ *     把首段打烊时刻（如 14:00）误当成当日打烊时刻；
+ *   · 判据为"到达时刻落在 segments 中**任一段**内"。
+ * 任一项不确定 → 五字段全 null 且 segments 为 []（closedOnThisDate 三态：true/false/null）。
+ *
+ * @param {object} poi POI
+ * @param {string|null} dateISO 目标日期 yyyy-MM-dd
+ * @returns {{open: string|null, close: string|null, lastEntry: string|null,
+ *            closedOnThisDate: boolean|null, openHoursRaw: string|null,
+ *            segments: Array<{open: string, close: string, lastEntry: string|null}>, reason: string}}
+ */
+export function parseOpenTime(poi, dateISO = null) {
+  const source = openHoursSourceOf(poi);
+  if (source === null) return emptyOpenHours(hasOpenHoursKey(poi) ? 'source_not_string' : 'no_source');
+  const date = parseIsoDate(dateISO);
+  if (!date) return emptyOpenHours('invalid_date');
+
+  const clauses = splitOpenHoursClauses(source).map((c) => ({ ...c, info: analyzeOpenHoursClause(c.text) }));
+  if (!clauses.length) return emptyOpenHours('empty_source');
+
+  // ---- 全局保守拦截：原文语法本身不可确定，直接放弃，不做任何猜测 ----
+  // 注意：**多时段与 24 小时不再在此放弃** —— 前者由 segments 承载，后者是确定性语义。
+  for (const c of clauses) {
+    if (c.info.rangeStatus === 'incomplete') return emptyOpenHours('incomplete_season_range');
+    if (c.info.rangeStatus === 'ambiguous') return emptyOpenHours('ambiguous_season_range');
+    if (c.info.windows.some((w) => !w.valid)) return emptyOpenHours('invalid_window');
+    if (c.info.lastEntries.some((x) => !x.valid)) return emptyOpenHours('invalid_last_entry');
+  }
+  // 注：**不再**因为"一句多段"或"一句多个停止入场时刻"整体放弃 —— 多段由 segments 承载，
+  // 停止入场时刻无法归属到具体某一段时置 null（见下方 le 取值），不制造错误信息。
+
+  const rangeHit = (info) => (info.rangeStatus === 'none' ? true : info.ranges.some(([s, e]) => date.md >= s && date.md <= e));
+  const weekdayHit = (info) => info.weekdays === null || info.weekdays.has(date.weekday);
+
+  // ---- 1. 24 小时 / 全天开放：确定性语义，识别为 00:00-24:00 单段 ----
+  const allDayHits = clauses.filter((c) => c.info.allDay && rangeHit(c.info) && weekdayHit(c.info));
+  if (allDayHits.length) {
+    if (allDayHits.some((c) => c.info.holidayExcept || c.info.holidayNamed)) return emptyOpenHours('holiday_exception');
+    if (allDayHits.some((c) => c.info.notice)) return emptyOpenHours('official_notice');
+    return {
+      open: ALL_DAY_SEGMENT.open,
+      close: ALL_DAY_SEGMENT.close,
+      lastEntry: null,
+      closedOnThisDate: false,
+      openHoursRaw: allDayHits[0].raw,
+      segments: [{ ...ALL_DAY_SEGMENT }],
+      reason: 'ok',
+    };
+  }
+
+  // ---- 2. 明确关闭子句（无营业段的纯关闭句）优先 ----
+  // 关闭词自带星期（"周一全天关闭" / "(周一闭园)"）时以它为准；没有星期限定才视为整段期间全关。
+  const closeWdHit = (info) => (info.closeWeekdays ? info.closeWeekdays.has(date.weekday) : weekdayHit(info));
+  // 【防假阳性】纯关闭句必须**带星期或日期区间**才算排期性闭馆。
+  // 实测反例（苏州博物馆）："……如本馆遇有重大活动或重要设备设施维修保养时，可根据需要临时闭馆，
+  // 届时将告示公众。" 含"闭馆"但既无星期也无日期 → 若当成排期闭馆，会**每一天都被判闭馆**
+  // （阻塞级错误）。这类条件句一律不产出 closedOnThisDate。
+  const isScheduled = (info) => info.weekdays !== null || info.rangeStatus === 'ok';
+  const closeHits = clauses.filter((c) => c.info.close && c.info.windows.length === 0 &&
+      isScheduled(c.info) && rangeHit(c.info) && closeWdHit(c.info));
+  if (closeHits.length) {
+    for (const c of closeHits) {
+      if (c.info.holidayExcept || c.info.holidayNamed) return emptyOpenHours('holiday_exception');
+      if (c.info.notice) return emptyOpenHours('official_notice');
+    }
+    // 明确闭馆 = 成功解析：三个时刻为 null，segments 为空，raw 为关闭原文切片
+    return { open: null, close: null, lastEntry: null, closedOnThisDate: true, openHoursRaw: closeHits[0].raw, segments: [], reason: 'closed' };
+  }
+
+  // ---- 3. 收集该日期全部适用营业段（多时段：合并而非放弃）----
+  const entries = [];
+  const excludedByClose = [];
+  for (const c of clauses) {
+    if (!rangeHit(c.info)) continue;
+    if (c.info.windows.length === 0) continue;
+    // 括号里的关闭日属于**这一段**（如"夜场(周一闭园)"）→ 该段在该星期不适用
+    if (c.info.closeWeekdays && c.info.closeWeekdays.has(date.weekday)) {
+      excludedByClose.push(c);
+      continue;
+    }
+    if (!weekdayHit(c.info)) continue; // 星期范围未命中：不反推闭馆，保持未知
+    // 具名节假日（春节/国庆…）是否有别于平日需要权威日历 → 按未知处理（设计 A-3）
+    if (c.info.holidayExcept || c.info.holidayNamed) return emptyOpenHours('holiday_exception');
+    if (c.info.notice) return emptyOpenHours('official_notice');
+    // 停止入场时刻多于一个时无法归属到具体某一段 → 置 null（丢 lastEntry 不造错误信息）
+    const le = c.info.lastEntries.length === 1 ? c.info.lastEntries[0] : null;
+    for (const w of c.info.windows) {
+      if (!(w.openMin < w.closeMin)) return emptyOpenHours('invalid_window');
+      if (le && (le.minutes < w.openMin || le.minutes > w.closeMin)) return emptyOpenHours('invalid_last_entry');
+      entries.push({
+        open: w.openText, close: w.closeText, lastEntry: le ? le.text : null,
+        openMin: w.openMin, closeMin: w.closeMin, raw: c.raw,
+      });
+    }
+  }
+
+  // 该日期一段都不适用，但存在被"明确关闭文字"排除掉的段 → 走闭馆语义（有原文证据，不是反推）
+  if (entries.length === 0) {
+    if (excludedByClose.length) {
+      if (excludedByClose.some((c) => c.info.holidayExcept || c.info.holidayNamed)) return emptyOpenHours('holiday_exception');
+      if (excludedByClose.some((c) => c.info.notice)) return emptyOpenHours('official_notice');
+      return { open: null, close: null, lastEntry: null, closedOnThisDate: true, openHoursRaw: excludedByClose[0].raw, segments: [], reason: 'closed' };
+    }
+    return emptyOpenHours('no_matching_clause');
+  }
+
+  // 去重 + 按开门时刻排序，保证相同输入 → 相同输出
+  const seen = new Set();
+  const segments = entries
+    .filter((e) => {
+      const k = `${e.open}-${e.close}`;
+      if (seen.has(k)) return false;
+      seen.add(k);
+      return true;
+    })
+    .sort((a, b) => a.openMin - b.openMin || a.closeMin - b.closeMin)
+    .map((e) => ({ open: e.open, close: e.close, lastEntry: e.lastEntry }));
+  const raws = [...new Set(entries.map((e) => e.raw))];
+
+  if (segments.length === 1) {
+    return {
+      open: segments[0].open,
+      close: segments[0].close,
+      lastEntry: segments[0].lastEntry,
+      closedOnThisDate: false,
+      openHoursRaw: raws.join('；'),
+      segments,
+      reason: 'ok',
+    };
+  }
+  // 多时段：open/close 必须为空，且 lastEntry 只在"能明确归属整日"时才给 —— 各段自带 lastEntry
+  return {
+    open: null,
+    close: null,
+    lastEntry: null,
+    closedOnThisDate: false,
+    openHoursRaw: raws.join('；'),
+    segments,
+    reason: 'ok_multi_segment',
+  };
 }
 
 function toMin(hhmm) {
@@ -169,8 +767,12 @@ function costOf(p) {
 function normalizePoi(p) {
   const [lng, lat] = String(p.location || '').split(',').map(Number);
   if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
-  const { open, close } = parseOpenTime(p);
+  // 【SR-OH1/T02】此处**不解析**营业时间：候选收集阶段 POI 还没分配到某一天，
+  // 而季节区间与星期规则必须拿到目标日期才能判定。只暂存原文，解析延迟到 buildDay。
+  const _openHoursSource = openHoursSourceOf(p);
   return {
+    // 服务端内部字段：绝不进入客户端 payload（toLocation 只显式取解析结论五字段）
+    _openHoursSource,
     id: p.id,
     name: p.name,
     address: typeof p.address === 'string' ? p.address : (p.address?.[0]?.value || p.address?.[0] || ''),
@@ -179,8 +781,6 @@ function normalizePoi(p) {
     district: p.adname || p.district || '',
     typecode: p.typecode || '',
     rating: ratingOf(p),
-    openTime: open,
-    closeTime: close,
     typeText: typeof p.type === 'string' ? p.type : '',
     // 【SR-02】参考价原串透传（已归一：空数组 → null）
     cost: costOf(p),
@@ -218,7 +818,16 @@ async function gatherCandidates(city, interestKeys, need) {
   return [...map.values()];
 }
 
-async function findNearbyRestaurant(lng, lat, atMin = null) {
+/**
+ * 就近餐厅候选。时段筛选**复用同一个日期感知 parser**，不再保留第二套简单正则
+ * （设计 §1.2：禁止第二套正则；旧写法依赖恒为 null 的 closeTime，等于不筛选）。
+ * @param {number} lng 经度
+ * @param {number} lat 纬度
+ * @param {number|null} atMin 目标时刻（当日 0 点起分钟）
+ * @param {string|null} dateISO 目标日期 yyyy-MM-dd
+ * @returns {Promise<object|null>} 餐厅 POI 或 null
+ */
+async function findNearbyRestaurant(lng, lat, atMin = null, dateISO = null) {
   try {
     const data = await amapCall('/v3/place/around', {
       location: `${lng},${lat}`,
@@ -233,13 +842,18 @@ async function findNearbyRestaurant(lng, lat, atMin = null) {
     if (!pois.length) return null;
     let pool = pois;
     if (atMin !== null) {
-      // 优先选该时段营业中的餐厅
+      // 优先选该时段营业中的餐厅（日期感知：同一 POI 在周一/淡季可能不营业）
       const open = pois.filter((p) => {
-        const close = toMin(p.closeTime);
-        const openM = toMin(p.openTime);
-        if (close === null && openM === null) return true;
-        if (openM !== null && atMin < openM) return false;
-        return close === null || close - atMin >= 60;
+        const oh = parseOpenTime(p, dateISO);
+        if (oh.closedOnThisDate === true) return false; // 明确闭店；null（未知）不拦
+        const segs = (oh.segments || [])
+          .map((s) => ({ openMin: toMin(s.open), closeMin: toMin(s.close) }))
+          .filter((s) => s.openMin !== null && s.closeMin !== null);
+        if (!segs.length) return true; // 未知 → 不拦，宁可漏报
+        // 判据：到达时刻落在**任一段**内，且该段剩余 ≥ 60 分钟（沿用原有余量约定）
+        const seg = segs.find((s) => atMin >= s.openMin && atMin <= s.closeMin);
+        if (!seg) return false; // 还没开门，或已过全部时段
+        return seg.closeMin - atMin >= 60;
       });
       if (open.length) pool = open;
     }
@@ -683,19 +1297,22 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
     }
     const stay = extra.stayOverride ?? Math.round((baseStay({ typecode: poi.typecode || '', name: poi.name }) * STAY_FACTOR[pace]) / 15) * 15;
     const arrival = clock;
-    const closeMin = toMin(poi.closeTime);
+    // 【SR-OH1/T02】按**目标日期**解析一次营业时间，注入 toLocation；
+    // poi 上已不再有 openTime/closeTime（normalizePoi 只暂存 _openHoursSource）。
+    const openHours = extra.openHours || parseOpenTime(poi, dateStr);
+    const closeMin = toMin(openHours.close);
     if (closeMin !== null && arrival + stay > closeMin) {
       if (closeMin - arrival >= 45) {
         // 压缩停留时长以适应打烊
         const fit = Math.max(45, closeMin - arrival - 10);
-        locations.push(toLocation(poi, arrival, fit, travel, extra));
+        locations.push(toLocation(poi, arrival, fit, travel, { ...extra, openHours }));
         clock = arrival + fit;
         warnings.push(`第${dayIndex + 1}天「${poi.name}」打烊较早，建议停留时长已压缩至${fit}分钟`);
         return;
       }
-      warnings.push(`第${dayIndex + 1}天「${poi.name}」按当前时间排到打烊前玩不完(${poi.closeTime}打烊)，建议调换顺序、提前安排或替换`);
+      warnings.push(`第${dayIndex + 1}天「${poi.name}」按当前时间排到打烊前玩不完(${openHours.close}打烊)，建议调换顺序、提前安排或替换`);
     }
-    locations.push(toLocation(poi, arrival, stay, travel, extra));
+    locations.push(toLocation(poi, arrival, stay, travel, { ...extra, openHours }));
     clock = arrival + stay;
   };
 
@@ -715,7 +1332,7 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
       }
     }
     if (!lunchDone && clock >= mealLimit.lunch - 60) {
-      const meal = await findNearbyRestaurant(prev ? prev.lng : poi.lng, prev ? prev.lat : poi.lat, Math.max(clock, 12 * 60));
+      const meal = await findNearbyRestaurant(prev ? prev.lng : poi.lng, prev ? prev.lat : poi.lat, Math.max(clock, 12 * 60), dateStr);
       if (meal) {
         await pushLoc({ ...meal, typecode: '050100' }, null, { isMeal: '午餐' });
         lunchDone = true;
@@ -724,7 +1341,7 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
     await pushLoc(poi, travel);
     prev = poi;
     if (lunchDone && !dinnerDone && clock >= mealLimit.dinner) {
-      const meal = await findNearbyRestaurant(poi.lng, poi.lat, clock);
+      const meal = await findNearbyRestaurant(poi.lng, poi.lat, clock, dateStr);
       if (meal) {
         await pushLoc({ ...meal, typecode: '050100' }, { minutes: 10, mode: 'walk', km: 0.6 }, { isMeal: '晚餐' });
         dinnerDone = true;
@@ -734,7 +1351,7 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
   // 天结束较早（如轻松节奏）时，补插入午餐
   if (!lunchDone && clock >= 12 * 60 && ordered.length) {
     const lastPoi = ordered[ordered.length - 1];
-    const meal = await findNearbyRestaurant(lastPoi.lng, lastPoi.lat, Math.max(clock, 12 * 60));
+    const meal = await findNearbyRestaurant(lastPoi.lng, lastPoi.lat, Math.max(clock, 12 * 60), dateStr);
     if (meal) {
       await pushLoc({ ...meal, typecode: '050100' }, { minutes: 10, mode: 'walk', km: 0.6 }, { isMeal: '午餐' });
       lunchDone = true;
@@ -752,7 +1369,18 @@ async function buildDay(dayIndex, dateStr, points, { pace, city, warnings, tripM
   return { date: dateStr, dayNumber: dayIndex + 1, locations };
 }
 
+/**
+ * 地点 payload。营业时间五字段来自 buildDay 已解析的一次性值 `extra.openHours`；
+ * 解析失败即五字段全 null（不估算、不兜底填充）。`_openHoursSource` 原文绝不入 payload。
+ * @param {object} poi 已归一 POI
+ * @param {number} arrival 到达分钟
+ * @param {number} stay 停留分钟
+ * @param {object|null} travel 交通段
+ * @param {object} extra 扩展（isMeal / must / stayOverride / openHours）
+ * @returns {object} 地点 payload
+ */
 function toLocation(poi, arrival, stay, travel, extra = {}) {
+  const openHours = extra.openHours || emptyOpenHours('not_parsed');
   return {
     name: poi.name,
     address: poi.address,
@@ -773,8 +1401,15 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
             distance: Math.round((travel.km || 0) * 1000),
           }
         : null,
-    openTime: poi.openTime || null,
-    closeTime: poi.closeTime || null,
+    // 【SR-OH1/T02】日期感知营业时间结论：解析不出即 null（三态 closedOnThisDate，null≠false）
+    openTime: openHours.open ?? null,
+    closeTime: openHours.close ?? null,
+    lastEntryTime: openHours.lastEntry ?? null,
+    closedOnThisDate: openHours.closedOnThisDate ?? null,
+    // 与结论对应的原文命中子句（原样切片），供 UI 副行核对；无证据则不展示结构化结论
+    openHoursRaw: openHours.openHoursRaw ?? null,
+    // 多时段：单时段时长度 1；多时段时 openTime/closeTime 为 null，只由本字段承载
+    openSegments: Array.isArray(openHours.segments) ? openHours.segments.map((s) => ({ ...s })) : [],
     rating: poi.rating || null,
     // 【SR-02】参考价原串透传到地点层（已由 normalizePoi 归一：空数组 → null）。
     // 餐饮：实测 18/20 有值（人均）→ 客户端可**离线**取用，无需再打 /api/planner/prices。
@@ -1016,5 +1651,7 @@ export {
   findRestStop, findRentalHub, toLocation, fmt, toMin, extractHints,
   // cost 口径三件套（SR-02 / SR-04a 收敛）：多城管线复用同一套，避免各抄一份正则
   costOf, parseCost, costText,
+  // 营业时间解析（SR-OH1/T02）已在函数定义处 export（openHoursSourceOf / parseOpenTime /
+  // emptyOpenHours），供多城管线复用同一套，禁止另写第二套正则。
   INTERESTS, PER_DAY_CAP, START_CLOCK, STAY_FACTOR, VEHICLE_CONF,
 };

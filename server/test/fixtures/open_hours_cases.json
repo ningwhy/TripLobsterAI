@@ -1,0 +1,932 @@
+{
+  "meta": {
+    "purpose": "SR-OH1/T02 日期感知营业时间解析的离线金标。测试**不联网、不消耗高德配额**。",
+    "source": "deliverables/_fx-openhours-probe.mjs / _fx-openhours-probe2.mjs 实测 opentime2 / open_time 原文（已脱敏，不含任何密钥）。",
+    "contract": "解析失败 → open/close/lastEntry/closedOnThisDate/openHoursRaw 五字段全 null 且 segments 为空数组；closedOnThisDate 三态（true/false/null），null 绝不当 false。",
+    "multiSegmentContract": "单时段 → open/close 有值且 segments 长度 1；多时段 → open/close **强制为 null**，只由 segments 承载。判据是「到达时刻落在 segments 中任一段内」。",
+    "weekdayConvention": "1=周一 … 7=周日；expectWeekday 由测试用 Date.UTC 反算并断言，防止 fixture 里写错星期。",
+    "diagnostic": "parseOpenTime 额外返回 reason（服务端诊断/探针统计用），不进入客户端 payload。"
+  },
+  "cases": [
+    {
+      "id": "gugong-peak-open",
+      "title": "故宫·旺季（4/1-10/31）非周一 → 08:30-17:00，16:00 停止检票",
+      "semantic": "季节区间 + 星期范围 + 停止入场",
+      "poi": {
+        "id": "B000A8UIN8",
+        "name": "故宫博物院",
+        "biz_ext": {
+          "opentime2": "旺季4月1日至10月31日 周二至周日 08:30-17:00 16:00停止检票，淡季11月1日至3月31日 周二至周日 08:30-16:30 15:30停止检票，周一全天关闭，节假日营业时间以官方通知为准"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "08:30",
+        "close": "17:00",
+        "lastEntry": "16:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["08:30", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "08:30-17:00"
+    },
+    {
+      "id": "gugong-offpeak-open",
+      "title": "故宫·淡季（11/1-次年3/31，跨年区间）→ 08:30-16:30，15:30 停止检票",
+      "semantic": "季节区间（跨年）",
+      "poi": {
+        "id": "B000A8UIN8",
+        "name": "故宫博物院",
+        "biz_ext": {
+          "opentime2": "旺季4月1日至10月31日 周二至周日 08:30-17:00 16:00停止检票，淡季11月1日至3月31日 周二至周日 08:30-16:30 15:30停止检票，周一全天关闭，节假日营业时间以官方通知为准"
+        }
+      },
+      "date": "2026-01-15",
+      "expectWeekday": 4,
+      "expectNull": false,
+      "expect": {
+        "open": "08:30",
+        "close": "16:30",
+        "lastEntry": "15:30",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["08:30", "16:30"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "08:30-16:30"
+    },
+    {
+      "id": "gugong-monday-closed",
+      "title": "故宫·明确周一全天关闭 → closed=true，三个时刻为 null，raw 为关闭原文切片",
+      "semantic": "闭馆日",
+      "poi": {
+        "id": "B000A8UIN8",
+        "name": "故宫博物院",
+        "biz_ext": {
+          "opentime2": "旺季4月1日至10月31日 周二至周日 08:30-17:00 16:00停止检票，淡季11月1日至3月31日 周二至周日 08:30-16:30 15:30停止检票，周一全天关闭，节假日营业时间以官方通知为准"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": true
+      },
+      "expectSegments": [],
+      "expectReason": "closed",
+      "expectRawIncludes": "周一全天关闭"
+    },
+    {
+      "id": "guobo-crossyear-winter",
+      "title": "国博·跨年季节（11/1-次年5/31）周二 → 09:00-17:00，16:00 停止入馆",
+      "semantic": "季节区间（显式次年）+ 星期范围 + 停止入场",
+      "poi": {
+        "id": "B000A7ZL90",
+        "name": "中国国家博物馆",
+        "biz_ext": {
+          "opentime2": "周一全天关闭(法定节假日除外)；11月1日至次年5月31日周二至周日09:00-17:00(16:00停止入馆)；6月1日至10月31日周二至周日09:00-17:30(16:30停止入馆)"
+        }
+      },
+      "date": "2026-11-10",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": "16:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "09:00-17:00"
+    },
+    {
+      "id": "guobo-crossyear-summer",
+      "title": "国博·夏季区间（6/1-10/31）周二 → 09:00-17:30，16:30 停止入馆",
+      "semantic": "季节区间切换",
+      "poi": {
+        "id": "B000A7ZL90",
+        "name": "中国国家博物馆",
+        "biz_ext": {
+          "opentime2": "周一全天关闭(法定节假日除外)；11月1日至次年5月31日周二至周日09:00-17:00(16:00停止入馆)；6月1日至10月31日周二至周日09:00-17:30(16:30停止入馆)"
+        }
+      },
+      "date": "2026-06-16",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:30",
+        "lastEntry": "16:30",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:30"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "09:00-17:30"
+    },
+    {
+      "id": "guobo-crossyear-winter-friday",
+      "title": "国博·跨年区间落在 3 月（验证 11/1-次年5/31 覆盖 1-5 月）",
+      "semantic": "季节区间（跨年下段）",
+      "poi": {
+        "id": "B000A7ZL90",
+        "name": "中国国家博物馆",
+        "biz_ext": {
+          "opentime2": "周一全天关闭(法定节假日除外)；11月1日至次年5月31日周二至周日09:00-17:00(16:00停止入馆)；6月1日至10月31日周二至周日09:00-17:30(16:30停止入馆)"
+        }
+      },
+      "date": "2026-03-20",
+      "expectWeekday": 5,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": "16:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "11月1日至次年5月31日"
+    },
+    {
+      "id": "guobo-monday-holiday-exception",
+      "title": "国博·周一 + 法定节假日除外 → 无权威节假日日历，全 null（不反推、不查表）",
+      "semantic": "节假日例外",
+      "poi": {
+        "id": "B000A7ZL90",
+        "name": "中国国家博物馆",
+        "biz_ext": {
+          "opentime2": "周一全天关闭(法定节假日除外)；11月1日至次年5月31日周二至周日09:00-17:00(16:00停止入馆)；6月1日至10月31日周二至周日09:00-17:30(16:30停止入馆)"
+        }
+      },
+      "date": "2026-06-15",
+      "expectWeekday": 1,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "holiday_exception"
+    },
+    {
+      "id": "zhuozheng-endash-peak",
+      "title": "拙政园（去掉夜场子句）·全角破折号月份区间 3–10月 + 一位小时 6:45 → 归一 06:45",
+      "semantic": "月份区间（全角破折号）+ 停止入场 + 小时补零",
+      "poi": {
+        "id": "B00140J0CJ",
+        "name": "拙政园",
+        "biz_ext": {
+          "opentime2": "3–10月:06:45–17:30(17:00 停止入园),11–2月:7:30–17:00(16:30 停止入园)"
+        }
+      },
+      "date": "2026-06-16",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "06:45",
+        "close": "17:30",
+        "lastEntry": "17:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["06:45", "17:30"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "06:45"
+    },
+    {
+      "id": "zhuozheng-endash-offpeak",
+      "title": "拙政园（去掉夜场子句）·11–2月 跨年月份区间，1 月命中 → 07:30-17:00",
+      "semantic": "月份区间（跨年）",
+      "poi": {
+        "id": "B00140J0CJ",
+        "name": "拙政园",
+        "biz_ext": {
+          "opentime2": "3–10月:06:45–17:30(17:00 停止入园),11–2月:7:30–17:00(16:30 停止入园)"
+        }
+      },
+      "date": "2026-01-15",
+      "expectWeekday": 4,
+      "expectNull": false,
+      "expect": {
+        "open": "07:30",
+        "close": "17:00",
+        "lastEntry": "16:30",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["07:30", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "7:30"
+    },
+    {
+      "id": "zhuozheng-night-session-tuesday",
+      "title": "拙政园·原文含夜场场次：非周一 → 日场 + 夜场**两段**都进 segments（open/close 强制为 null）",
+      "semantic": "多时段（夜场并入 segments）",
+      "poi": {
+        "id": "B00140J0CJ",
+        "name": "拙政园",
+        "biz_ext": {
+          "opentime2": "3–10月:06:45–17:30(17:00 停止入园),11–2月:7:30–17:00(16:30 停止入园)；夜场18:30–21:00(周一闭园)(数据来源:高德地图)"
+        }
+      },
+      "date": "2026-06-16",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["06:45", "17:30"], ["18:30", "21:00"]],
+      "expectReason": "ok_multi_segment",
+      "assertNotClose": "17:30"
+    },
+    {
+      "id": "zhuozheng-night-session-monday",
+      "title": "拙政园·周一：夜场(周一闭园)不适用 → 只剩日场单段 06:45-17:30",
+      "semantic": "多时段（场次级关闭日）",
+      "poi": {
+        "id": "B00140J0CJ",
+        "name": "拙政园",
+        "biz_ext": {
+          "opentime2": "3–10月:06:45–17:30(17:00 停止入园),11–2月:7:30–17:00(16:30 停止入园)；夜场18:30–21:00(周一闭园)(数据来源:高德地图)"
+        }
+      },
+      "date": "2026-06-15",
+      "expectWeekday": 1,
+      "expectNull": false,
+      "expect": {
+        "open": "06:45",
+        "close": "17:30",
+        "lastEntry": "17:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["06:45", "17:30"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "06:45"
+    },
+    {
+      "id": "shangbo-weekday-open",
+      "title": "上博·周二至周日 + 最晚进入15:00（时刻在后表达）→ 周三命中",
+      "semantic": "星期范围 + 停止入场（后置表达）",
+      "poi": {
+        "id": "B00140F0HK",
+        "name": "上海博物馆",
+        "biz_ext": {
+          "opentime2": "周二至周日 09:00-17:00 最晚进入15:00，周一闭馆（节假日除外），暑期夜场营业时间以官方通知为准",
+          "open_time": "09:00-17:00"
+        }
+      },
+      "date": "2026-10-14",
+      "expectWeekday": 3,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": "15:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "最晚进入15:00"
+    },
+    {
+      "id": "shangbo-monday-exception",
+      "title": "上博·周一闭馆（节假日除外）→ 全 null，不当作开放也不当作确认闭馆",
+      "semantic": "闭馆日 + 节假日例外",
+      "poi": {
+        "id": "B00140F0HK",
+        "name": "上海博物馆",
+        "biz_ext": {
+          "opentime2": "周二至周日 09:00-17:00 最晚进入15:00，周一闭馆（节假日除外），暑期夜场营业时间以官方通知为准",
+          "open_time": "09:00-17:00"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "holiday_exception"
+    },
+    {
+      "id": "simple-open-time-only",
+      "title": "仅简单 open_time（无 opentime2）→ 不退化，全年单段 09:00-17:00",
+      "semantic": "简单格式兼容",
+      "poi": {
+        "id": "S001",
+        "name": "某景点",
+        "biz_ext": {
+          "open_time": "09:00-17:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "09:00-17:00"
+    },
+    {
+      "id": "multi-window-space",
+      "title": "多时段「11:00-14:00 16:00-22:00」→ 解析出 2 段，open/close 为 null（结构性防假阳性）",
+      "semantic": "多时段",
+      "poi": {
+        "id": "S002",
+        "name": "某餐厅A（原乡私厨饺子同款格式）",
+        "biz_ext": {
+          "opentime2": "11:00-14:00 16:00-22:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["11:00", "14:00"], ["16:00", "22:00"]],
+      "expectReason": "ok_multi_segment",
+      "assertNotClose": "14:00"
+    },
+    {
+      "id": "multi-window-comma",
+      "title": "多时段「11:00-14:30，17:00-21:00」→ 解析出 2 段",
+      "semantic": "多时段",
+      "poi": {
+        "id": "S003",
+        "name": "某餐厅B（箜咔泰式小吃同款格式）",
+        "biz_ext": {
+          "opentime2": "11:00-14:30，17:00-21:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["11:00", "14:30"], ["17:00", "21:00"]],
+      "expectReason": "ok_multi_segment",
+      "assertNotClose": "14:30"
+    },
+    {
+      "id": "multi-window-overlap",
+      "title": "多时段「11:30-22:00 11:00-22:00」（克比叔叔同款）→ 解析出 2 段，按开门时刻排序",
+      "semantic": "多时段",
+      "poi": {
+        "id": "S003B",
+        "name": "某餐厅C",
+        "biz_ext": {
+          "opentime2": "11:30-22:00 11:00-22:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["11:00", "22:00"], ["11:30", "22:00"]],
+      "expectReason": "ok_multi_segment",
+      "assertNotClose": "22:00"
+    },
+    {
+      "id": "empty-array-source",
+      "title": "open_time=[] 且 opentime2=[] → 拒绝数组 truthy 陷阱，全 null",
+      "semantic": "空数组",
+      "poi": {
+        "id": "S004",
+        "name": "某景点（无营业时间）",
+        "biz_ext": {
+          "open_time": [],
+          "opentime2": []
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "source_not_string"
+    },
+    {
+      "id": "no-biz-ext",
+      "title": "完全没有 biz_ext → 全 null，不抛异常",
+      "semantic": "缺失字段",
+      "poi": {
+        "id": "S005",
+        "name": "某地点",
+        "biz_ext": {}
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "no_source"
+    },
+    {
+      "id": "opentime2-array-fallback",
+      "title": "opentime2=[] 但 open_time 有字符串 → 回退到 open_time，仍能解析",
+      "semantic": "数组被拒 + 回退",
+      "poi": {
+        "id": "S006",
+        "name": "某店铺",
+        "biz_ext": {
+          "opentime2": [],
+          "open_time": "08:00-20:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "08:00",
+        "close": "20:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["08:00", "20:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "08:00-20:00"
+    },
+    {
+      "id": "all-day-24h",
+      "title": "「24小时营业」→ 识别为 00:00-24:00 单段（不解析成 00:00-00:00，也不放弃）",
+      "semantic": "24小时",
+      "poi": {
+        "id": "S007",
+        "name": "某便利店",
+        "biz_ext": {
+          "opentime2": "24小时营业"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "00:00",
+        "close": "24:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["00:00", "24:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "24小时营业"
+    },
+    {
+      "id": "all-day-open",
+      "title": "「全天开放」→ 同上，00:00-24:00 单段",
+      "semantic": "24小时",
+      "poi": {
+        "id": "S008",
+        "name": "某开放式景区",
+        "biz_ext": {
+          "opentime2": "全天开放"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "00:00",
+        "close": "24:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["00:00", "24:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "全天开放"
+    },
+    {
+      "id": "incomplete-season-range",
+      "title": "「旺季 08:30-17:00」有季节词但区间端点缺失 → 放弃（不允许默认全年）",
+      "semantic": "季节区间残缺",
+      "poi": {
+        "id": "S009",
+        "name": "某季节性景区",
+        "biz_ext": {
+          "opentime2": "旺季 08:30-17:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "incomplete_season_range"
+    },
+    {
+      "id": "weekday-out-of-range",
+      "title": "「周二至周日 09:00-17:00」但目标日是周一 → 无命中；不得反推周一必闭馆（closed 保持 null）",
+      "semantic": "星期范围未命中（无关闭文字 → 不反推）",
+      "poi": {
+        "id": "S010",
+        "name": "某馆",
+        "biz_ext": {
+          "opentime2": "周二至周日 09:00-17:00"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "no_matching_clause"
+    },
+    {
+      "id": "weekday-union-hit",
+      "title": "星期并集「周一,周四至周日 10:00-18:00」→ 周一命中（逗号不得被误切）",
+      "semantic": "星期并集",
+      "poi": {
+        "id": "S011",
+        "name": "某馆B",
+        "biz_ext": {
+          "opentime2": "周一,周四至周日 10:00-18:00"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": false,
+      "expect": {
+        "open": "10:00",
+        "close": "18:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["10:00", "18:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "周一,周四至周日"
+    },
+    {
+      "id": "weekday-union-miss",
+      "title": "同一并集原文，周二不在集合内 → 无命中",
+      "semantic": "星期并集未命中",
+      "poi": {
+        "id": "S011",
+        "name": "某馆B",
+        "biz_ext": {
+          "opentime2": "周一,周四至周日 10:00-18:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "no_matching_clause"
+    },
+    {
+      "id": "invalid-window-crossmidnight",
+      "title": "「22:00-02:00」跨午夜窗口无法用单段表达 → 放弃",
+      "semantic": "非法时间段",
+      "poi": {
+        "id": "S012",
+        "name": "某夜店",
+        "biz_ext": {
+          "opentime2": "22:00-02:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "invalid_window"
+    },
+    {
+      "id": "invalid-last-entry",
+      "title": "停止入场 18:00 晚于打烊 17:00 → 一致性校验失败，全 null",
+      "semantic": "停止入场越界",
+      "poi": {
+        "id": "S013",
+        "name": "某园",
+        "biz_ext": {
+          "opentime2": "09:00-17:00 18:00停止检票"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "invalid_last_entry"
+    },
+    {
+      "id": "invalid-date",
+      "title": "日期 2026-02-30 非法（会被 Date 静默进位）→ invalid_date",
+      "semantic": "非法日期",
+      "poi": {
+        "id": "S014",
+        "name": "某景点",
+        "biz_ext": {
+          "opentime2": "09:00-17:00"
+        }
+      },
+      "date": "2026-02-30",
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "invalid_date"
+    },
+    {
+      "id": "notice-required",
+      "title": "营业子句带「以官方通知为准」→ 非确定性语法，放弃",
+      "semantic": "另行通知",
+      "poi": {
+        "id": "S015",
+        "name": "某临时展馆",
+        "biz_ext": {
+          "opentime2": "周二至周日 09:00-17:00（节假日另行通知）"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "official_notice"
+    },
+    {
+      "id": "close-in-parens-monday",
+      "title": "「09:00-17:00（周一闭馆）」周一 → 有明确关闭文字 → closed=true（闭馆语义，非 null）",
+      "semantic": "闭馆日（括号场次级）",
+      "poi": {
+        "id": "S016",
+        "name": "某馆C",
+        "biz_ext": {
+          "opentime2": "09:00-17:00（周一闭馆）"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": true
+      },
+      "expectSegments": [],
+      "expectReason": "closed",
+      "expectRawIncludes": "周一闭馆"
+    },
+    {
+      "id": "close-in-parens-wednesday",
+      "title": "同一原文周三 → 正常开放 09:00-17:00",
+      "semantic": "闭馆日（括号场次级）",
+      "poi": {
+        "id": "S016",
+        "name": "某馆C",
+        "biz_ext": {
+          "opentime2": "09:00-17:00（周一闭馆）"
+        }
+      },
+      "date": "2026-10-14",
+      "expectWeekday": 3,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok"
+    },
+    {
+      "id": "close-suffix-monday",
+      "title": "「09:00-17:00 周一闭馆」周一 → 星期令牌属关闭规则 → closed=true",
+      "semantic": "闭馆日（后置关闭句）",
+      "poi": {
+        "id": "S017",
+        "name": "某馆D",
+        "biz_ext": {
+          "opentime2": "09:00-17:00 周一闭馆"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": true
+      },
+      "expectSegments": [],
+      "expectReason": "closed"
+    },
+    {
+      "id": "yiheyuan-month-union-jan",
+      "title": "颐和园·月份区间并集「1月至3月,11月至12月」1 月命中 → 06:30-19:00",
+      "semantic": "月份区间并集",
+      "poi": {
+        "id": "B000A8UZ13",
+        "name": "颐和园",
+        "biz_ext": {
+          "opentime2": "1月至3月,11月至12月 周一至周日 06:30-19:00 最晚进入18:00；4月至10月 周一至周日 06:00-20:00 最晚进入19:00"
+        }
+      },
+      "date": "2026-01-15",
+      "expectWeekday": 4,
+      "expectNull": false,
+      "expect": {
+        "open": "06:30",
+        "close": "19:00",
+        "lastEntry": "18:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["06:30", "19:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "1月至3月,11月至12月"
+    },
+    {
+      "id": "yiheyuan-month-union-oct",
+      "title": "颐和园·同一原文 10 月落在「4月至10月」→ 06:00-20:00",
+      "semantic": "月份区间并集（另一段）",
+      "poi": {
+        "id": "B000A8UZ13",
+        "name": "颐和园",
+        "biz_ext": {
+          "opentime2": "1月至3月,11月至12月 周一至周日 06:30-19:00 最晚进入18:00；4月至10月 周一至周日 06:00-20:00 最晚进入19:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "06:00",
+        "close": "20:00",
+        "lastEntry": "19:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["06:00", "20:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "4月至10月"
+    },
+    {
+      "id": "tiantan-sub-venue-multi",
+      "title": "天坛·同一句含公园段与园中园段 → 两段都进 segments；两个停止入场时刻无法归属 → 各段 lastEntry=null",
+      "semantic": "多时段（子场馆）",
+      "poi": {
+        "id": "B000A8UYF9",
+        "name": "天坛公园",
+        "biz_ext": {
+          "opentime2": "1月至3月,11月至12月 周一至周日 06:30-22:00 最晚进入21:00 园中园08:00-17:00(16:30停止入园)；4月至10月 周一至周日 06:00-22:00 最晚进入21:00 园中园08:00-18:00(17:30停止入园)"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["06:00", "22:00"], ["08:00", "18:00"]],
+      "expectReason": "ok_multi_segment",
+      "expectSegmentLastEntry": [null, null],
+      "assertNotClose": "22:00"
+    },
+    {
+      "id": "slash-date-range-weekday",
+      "title": "苏州博物馆同款无「月/日」日期区间 10/07-12/31 → 周二命中 09:00-17:00",
+      "semantic": "无月日字样日期区间",
+      "poi": {
+        "id": "B00140GH9P",
+        "name": "苏州博物馆",
+        "biz_ext": {
+          "opentime2": "09/25-09/27 10:00–20:00开放 最晚进入19:00；01/01-09/24 周二–周日 09:00–17:00开放 最晚进入16:00；10/07-12/31 周二–周日 09:00–17:00开放 最晚进入16:00；01/01-09/24 周一 全天不开放；10/07-12/31 周一 全天不开放"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": "16:00",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "10/07-12/31"
+    },
+    {
+      "id": "slash-date-range-monday",
+      "title": "同一原文周一 → closed=true；且**不得**因无月日字样而把「周一全天不开放」误判为全年闭馆",
+      "semantic": "无月日字样日期区间（闭馆日）",
+      "poi": {
+        "id": "B00140GH9P",
+        "name": "苏州博物馆",
+        "biz_ext": {
+          "opentime2": "09/25-09/27 10:00–20:00开放 最晚进入19:00；01/01-09/24 周二–周日 09:00–17:00开放 最晚进入16:00；10/07-12/31 周二–周日 09:00–17:00开放 最晚进入16:00；01/01-09/24 周一 全天不开放；10/07-12/31 周一 全天不开放"
+        }
+      },
+      "date": "2026-10-12",
+      "expectWeekday": 1,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": true
+      },
+      "expectSegments": [],
+      "expectReason": "closed"
+    },
+    {
+      "id": "slash-date-range-panda-peak",
+      "title": "大熊猫基地同款「03-16至10-31」→ 10 月命中 07:30-17:00（不得与淡季段同时命中）",
+      "semantic": "无月日字样日期区间（季节切换）",
+      "poi": {
+        "id": "B00150H2XV",
+        "name": "成都大熊猫繁育研究基地",
+        "biz_ext": {
+          "opentime2": "03-16至10-31 周一至周日 07:30-17:00；11-01至03-15 周一至周日 08:00-16:30"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "07:30",
+        "close": "17:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["07:30", "17:00"]],
+      "expectReason": "ok"
+    },
+    {
+      "id": "slash-date-range-panda-offpeak",
+      "title": "同一原文 1 月落在「11-01至03-15」→ 08:00-16:30",
+      "semantic": "无月日字样日期区间（跨年）",
+      "poi": {
+        "id": "B00150H2XV",
+        "name": "成都大熊猫繁育研究基地",
+        "biz_ext": {
+          "opentime2": "03-16至10-31 周一至周日 07:30-17:00；11-01至03-15 周一至周日 08:00-16:30"
+        }
+      },
+      "date": "2026-01-15",
+      "expectWeekday": 4,
+      "expectNull": false,
+      "expect": {
+        "open": "08:00",
+        "close": "16:30",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["08:00", "16:30"]],
+      "expectReason": "ok"
+    },
+    {
+      "id": "all-day-0000-2400",
+      "title": "「周一至周日 00:00-24:00」（长隆同款）→ 00:00-24:00 单段，24:00 只作收尾时刻合法",
+      "semantic": "24小时",
+      "poi": {
+        "id": "B00140TV6X",
+        "name": "广州长隆旅游度假区",
+        "biz_ext": {
+          "opentime2": "周一至周日 00:00-24:00"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": false,
+      "expect": {
+        "open": "00:00",
+        "close": "24:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["00:00", "24:00"]],
+      "expectReason": "ok"
+    },
+    {
+      "id": "holiday-named-unknown",
+      "title": "良渚同款「清明节,劳动节…09:00–17:00开放」→ 无权威节假日日历，按未知处理返 null",
+      "semantic": "具名节假日（无法判定）",
+      "poi": {
+        "id": "B00140M8QK",
+        "name": "良渚博物院",
+        "biz_ext": {
+          "opentime2": "全年 周二–周日 09:00–17:00开放 最晚进入16:30；清明节,劳动节,端午节 09:00–17:00开放 最晚进入16:30"
+        }
+      },
+      "date": "2026-10-13",
+      "expectWeekday": 2,
+      "expectNull": true,
+      "expectSegments": [],
+      "expectReason": "holiday_exception"
+    }
+  ]
+}
