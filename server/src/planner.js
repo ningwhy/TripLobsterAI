@@ -1415,8 +1415,21 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
     // 餐饮：实测 18/20 有值（人均）→ 客户端可**离线**取用，无需再打 /api/planner/prices。
     // 酒店/景点：实测 0/20 全空 → 恒 null，客户端按"暂无参考价"降级，不编造。
     cost: poi.cost || null,
-    arrivalTime: fmt(arrival),
-    leaveTime: fmt(arrival + stay),
+    // 【可执行性校验】服务端规划时算出的时刻锚 —— 客户端 `itinerary_checker.dart`
+    // 时间链的**唯一锚点**（没有它，CH-01/02/06/07/08 全部静默跳过）。
+    //
+    // ⚠️ **已知行为：fmt() 会 mod 1440**（见本文件 :642）。
+    //    排过午夜的站会被绕回成次日凌晨 —— 真实产物里酒店 24:58 到达下发成 "00:58"。
+    //    客户端不把这两个字段当绝对分钟数用：`ItinerarySlot` 保留 raw 值做绕回检测
+    //    （`sourceWrapped`），并按锚单调展开后才参与比较（`_unwrapSourceArrivals`）。
+    //    绕回可被检测，不会静默变成错误结论，故下发 fmt 版是可接受的。
+    //
+    // ⛔ `Number.isFinite` 守卫：`arrival` 在某些分支可能为 null/undefined，
+    //    而 `fmt(undefined)` 会产出 `"NaN:NaN"` 这种脏值并直接进 payload
+    //    （客户端 `parseClockMinutes` 会返回 null，但服务端不该先造出脏串）。
+    //    同 `toMin()` 的判空口径（:638）：非有限数一律 null，不进结构化字段。
+    arrivalTime: Number.isFinite(arrival) ? fmt(arrival) : null,
+    leaveTime: Number.isFinite(arrival) && Number.isFinite(stay) ? fmt(arrival + stay) : null,
     mealFor: extra.isMeal || null,
     _must: extra.must || false,
   };

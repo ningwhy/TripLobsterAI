@@ -546,16 +546,36 @@ DayCheckResult checkItineraryDay(TripDay day) {
   }
 
   // ---------------- CH-06 / CH-07：转场 ----------------
+  //
+  // ⚠️ 两处都必须处理，否则真实 payload 上会变成**假阳性工厂**
+  // （2026-10 用真实 generate 产物验证过，见 test/itinerary_checker_test.dart
+  //   「CH-06/07 服务端零缓冲不误报」与「跨午夜绕回不误报」两例）：
+  //
+  // ① `sourceArrival` 必须**先按锚单调展开**再比。
+  //    服务端 `fmt()` 做了 `% 1440`（planner.js:642），排过午夜的站会被绕回成
+  //    次日凌晨（真实产物里酒店 `arr=00:58` 实际是 24:58）。
+  //    直接拿绕回值比，会得到「00:58 到达早于前站 17:38 离开 1000 分钟」
+  //    这种 nonsense，并升级成**阻塞级假阳性**。
+  //
+  // ② 必须跳过 `gap == travel` 的**规划器零缓冲**态。
+  //    服务端 `pushLoc` 就是按 `arrival[i+1] = leave[i] + travel[i+1]` 累加的
+  //    （planner.js:1292-1309），未编辑时两者恒等：
+  //      · CH-06 的 `gap < travel` 永不成立（死逻辑）；
+  //      · CH-07 的 `gap - travel < 10` **恒成立** → 每条相邻站都亮一遍。
+  //    「零缓冲」是规划的常态而不是异常，把它渲染成提醒就是假阳性。
+  //    只有二者分离时（插餐留下的空档、砍站留下的空洞、用户改过停留）才评估。
+  final sourceArrivals = _unwrapSourceArrivals(slots);
   for (var i = 1; i < slots.length; i++) {
     final next = slots[i];
     final prev = slots[i - 1];
-    final srcArrival = next.sourceArrival;
+    final srcArrival = sourceArrivals[i];
     final prevLeave = prev.leave;
     final travel = next.travelMinutes;
     // 任一缺失跳过：没有 payload 原计划到达、没有前站可靠离开、没有交通耗时 → 不判断
     if (srcArrival == null || prevLeave == null || travel == null) continue;
 
     final gap = srcArrival - prevLeave;
+    if (gap == travel) continue; // ② 规划器精确排满：既不是排不下，也不是缓冲不足
     if (gap < travel) {
       issues.add(
         ItineraryIssue(
@@ -665,6 +685,43 @@ int? _travelMinutesOf(Location loc) {
   final t = loc.transportMinutes;
   if (t == null || t <= 0) return null;
   return t;
+}
+
+/// 把 payload 原计划到达链按锚**单调展开**，撤销 `fmt()` 的 `% 1440` 绕回。
+///
+/// ## 为什么需要
+/// 服务端 `fmt()` 会 mod 1440（planner.js:642），所以排过午夜的站在 payload 里
+/// 长这样：酒店真实到达 24:58（1498 分钟），下发成 `"00:58"`（58 分钟）。
+/// 直接拿 58 去比「前站 23:15 离开（1395）」会得到 −1337 分钟的荒谬差值，
+/// 并升级成阻塞级假阳性。
+///
+/// ## 展开规则（确定性，不猜）
+/// 以第一个非 null 的 `sourceArrival` 为基准，向后逐站：只要比上一站小就补 1440，
+/// 直到不小于上一站。行程时刻在同一天内单调不减，这是**结构性事实**而非估算。
+///
+/// 返回数组与 `slots` 等长；payload 缺 `arrivalTime` 的位置为 null（该处规则自动跳过）。
+List<int?> _unwrapSourceArrivals(List<ItinerarySlot> slots) {
+  final out = <int?>[];
+  var previous = 0;
+  var started = false;
+  for (final slot in slots) {
+    final raw = slot.sourceArrival;
+    if (raw == null) {
+      out.add(null);
+      continue;
+    }
+    var value = raw;
+    if (started) {
+      while (value < previous) {
+        value += kMinutesPerDay;
+      }
+    } else {
+      started = true;
+    }
+    previous = value;
+    out.add(value);
+  }
+  return out;
 }
 
 /// 住宿是否构成「过夜边界」（设计 A-2）。

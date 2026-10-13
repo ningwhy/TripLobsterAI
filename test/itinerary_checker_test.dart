@@ -584,6 +584,76 @@ void main() {
       ]));
       expect(codes(noLeave, ItineraryIssueCode.ch06InsufficientTransfer), isEmpty);
     });
+
+    // -------------------------------------------------------------------------
+    // 下面三例锁定**真实 generate 产物**上暴露的两个假阳性（2026-10 实测）。
+    //
+    // 它们不是构造出来的边角料：拿 `generateTrip` 的真实 payload 喂 checker，
+    // 修复前每天都会亮 1~2 条，其中一条是**阻塞级**。构造用的时刻链
+    // 与真实产物逐站一致（见 deliverables/_fx-arrivaltime-payload.json）。
+    // -------------------------------------------------------------------------
+
+    test('真实产物①：服务端「零缓冲」规划态不误报 CH-07', () {
+      // 服务端 pushLoc 就是按 arrival[i+1] = leave[i] + travel[i+1] 累加的，
+      // 所以每一对的 gap 恒等于 travel —— 这是规划常态，不是缓冲不足。
+      final r = checkItineraryDay(day([
+        loc(name: '故宫', arrivalTime: '09:00', stayMinutes: 120),
+        loc(name: '什刹海', arrivalTime: '11:55', stayMinutes: 120, transportMinutes: 55),
+        loc(name: '餐厅', type: LocationType.restaurant, arrivalTime: '13:55', stayMinutes: 75),
+        loc(name: '雍和宫', arrivalTime: '16:08', stayMinutes: 45, transportMinutes: 58),
+        loc(name: '酒店', type: LocationType.hotel, arrivalTime: '18:52', stayMinutes: 600, transportMinutes: 119),
+      ]));
+
+      expect(codes(r, ItineraryIssueCode.ch07TightBuffer), isEmpty,
+          reason: '未编辑的规划器产物零缓冲是常态，渲染成提醒即假阳性工厂');
+      expect(codes(r, ItineraryIssueCode.ch06InsufficientTransfer), isEmpty);
+      expect(codes(r, ItineraryIssueCode.ch04OverMidnight), isEmpty);
+    });
+
+    test('真实产物②：fmt() 把跨午夜站绕回成 00:58，不误报 CH-06', () {
+      // 真实产物第 2 天：… 22:00 →(103min)→ 24:58，payload 里酒店 arr=00:58。
+      // 不先按锚展开就会得到「00:58 早于前站 23:15 离开 1337 分钟」→ 阻塞级假阳性。
+      final r = checkItineraryDay(day([
+        loc(name: '午餐', type: LocationType.restaurant, arrivalTime: '14:58', stayMinutes: 75),
+        loc(name: '晚餐', type: LocationType.restaurant, arrivalTime: '22:00', stayMinutes: 75, transportMinutes: 10),
+        loc(name: '酒店', type: LocationType.hotel, arrivalTime: '00:58', stayMinutes: 600, transportMinutes: 103),
+      ]));
+
+      expect(codes(r, ItineraryIssueCode.ch06InsufficientTransfer), isEmpty,
+          reason: '绕回值必须按锚单调展开后再比较');
+      expect(codes(r, ItineraryIssueCode.ch07TightBuffer), isEmpty);
+      // 酒店是过夜边界：24:58 到达也不判"当日排过午夜"
+      expect(codes(r, ItineraryIssueCode.ch04OverMidnight), isEmpty);
+    });
+
+    test('真实产物③：砍站留下的空档不误报（gap 远大于 travel）', () {
+      // 真实产物第 2 天两个餐厅之间差了 337 分钟（中间的景点被服务端超时裁剪砍掉了），
+      // 纯加法重建补不出这个空洞 —— 但 gap > travel 时既不是排不下也不是缓冲不足。
+      final r = checkItineraryDay(day([
+        loc(name: '午餐', type: LocationType.restaurant, arrivalTime: '14:58', stayMinutes: 75),
+        loc(name: '晚餐', type: LocationType.restaurant, arrivalTime: '22:00', stayMinutes: 75, transportMinutes: 10),
+      ]));
+
+      expect(codes(r, ItineraryIssueCode.ch06InsufficientTransfer), isEmpty);
+      expect(codes(r, ItineraryIssueCode.ch07TightBuffer), isEmpty);
+    });
+
+    test('用户编辑后 CH-06 真的亮起（证明通路不是死逻辑）', () {
+      final locations = [
+        loc(name: '故宫', arrivalTime: '09:00', stayMinutes: 120),
+        loc(name: '什刹海', arrivalTime: '11:55', stayMinutes: 120, transportMinutes: 55),
+      ];
+      expect(codes(checkItineraryDay(day(locations)), ItineraryIssueCode.ch06InsufficientTransfer), isEmpty);
+
+      // 用户把首站停留从 120 拉到 420 → 重建离开变成 16:00，晚于原计划到达 11:55
+      locations[0].stayMinutes = 420;
+      final after = checkItineraryDay(day(locations));
+      final issues = codes(after, ItineraryIssueCode.ch06InsufficientTransfer);
+      expect(issues.length, 1);
+      expect(issues.first.severity, IssueSeverity.blocking);
+      expect(issues.first.locationId, after.slots[1].location.id);
+      expect(issues.first.message, contains('245 分钟'));
+    });
   });
 
   // -------------------------------------------------------------------------

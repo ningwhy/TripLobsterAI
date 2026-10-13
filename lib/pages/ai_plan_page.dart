@@ -225,10 +225,15 @@ class _AiPlanPageState extends State<AiPlanPage> {
                 ?.map((e) => Map<String, dynamic>.from(e as Map))
                 .toList(),
             // ---- T02 补映射：把服务端已产出的字段接进模型（缺则保持 null，不编造）----
-            // 注：generate 管线**不产出** arrivalTime/leaveTime（那是 corridor 管线的能力），
-            //     这两个字段在 AI 生成行程里恒为 null → 预览页时间链无锚，
-            //     依赖时刻的规则（CH-01/02/06/07/08）全部跳过、只做 CH-09 披露。
-            //     ⛔ 这是**预期行为**，不是 bug：没有锚就不该推算（推算=编造起点）。
+            // 注：`arrivalTime`/`leaveTime` **generate 管线确实产出** ——
+            //     `planner.js` 的 `buildDay()` 内部 `clock` 累加出 `arrival`，
+            //     并由 `toLocation(poi, arrival, stay, travel, ...)` 下发（第 1418-1419 行）。
+            //     这里曾有一条「generate 不产出 arrivalTime」的注释，是**错的**，
+            //     它直接导致可执行性校验器被误判为"静默不亮"、白查了一轮。
+            //
+            // ⚠️ 已知行为：服务端 `fmt()` 会 `% 1440`，排过午夜的站会被绕回成次日凌晨
+            //    （真实产物里酒店 24:58 到达下发成 "00:58"）。客户端不把它当绝对分钟数用，
+            //     `ItinerarySlot` 按锚单调展开后才参与比较（见 `_unwrapSourceArrivals`）。
             arrivalTime: loc['arrivalTime'] as String?,
             leaveTime: loc['leaveTime'] as String?,
             rating: (loc['rating'] as num?)?.toDouble(),
