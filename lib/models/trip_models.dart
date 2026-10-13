@@ -198,6 +198,58 @@ class TripDay {
   );
 }
 
+/// 单个营业时段（服务端 `toLocation.openSegments[]` 的元素，T03）。
+///
+/// 只承载「某一天里的一个开放区间」，**不含**星期/季节/节假日语义 ——
+/// 那些是服务端 `parseOpenTime(poi, dateISO)` 按具体日期解完之后才成立的结论，
+/// 客户端不重复解读。
+///
+/// 【为什么多时段时 `openTime/closeTime` 恒为 null】
+/// 服务端为避免「只取第一个匹配时段」造成的结构性假阳性
+/// （`11:00-14:00 16:00-22:00` 若取首个 → 19:00 到达被误判打烊），
+/// 命中多于一段时五字段全 null，时段信息**只**由本类承载。
+class OpenSegment {
+  /// 开门时刻 `HH:mm`
+  final String open;
+
+  /// 打烊时刻 `HH:mm`（`24:00` 合法，但**仅**作打烊时刻）
+  final String close;
+
+  /// 该时段的停止入场时刻 `HH:mm`；null = 该时段没有/无法唯一解析
+  final String? lastEntry;
+
+  const OpenSegment({
+    required this.open,
+    required this.close,
+    this.lastEntry,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'open': open,
+        'close': close,
+        'lastEntry': lastEntry,
+      };
+
+  /// 兼容解析：**缺 open/close 的脏元素直接丢弃**，不补空串占位。
+  ///
+  /// 三铁律：半个时段（只有 open 没有 close）无法支撑任何判断，
+  /// 补一个 `''` 进去等于造数据 —— 一律返回 null 由调用方跳过。
+  static OpenSegment? tryFromJson(dynamic raw) {
+    if (raw is! Map) return null;
+    final json = Map<String, dynamic>.from(raw);
+    final open = json['open'] as String?;
+    final close = json['close'] as String?;
+    if (open == null || close == null || open.isEmpty || close.isEmpty) {
+      return null;
+    }
+    return OpenSegment(
+      open: open,
+      close: close,
+      lastEntry: json['lastEntry'] as String?,
+    );
+  }
+}
+
 class Location {
   final String id;
   String name;
@@ -220,7 +272,13 @@ class Location {
   List<Map<String, dynamic>>? hotelCandidates;
 
   // ---- T02 新增（全部**进** toJson/fromJson，要云同步）----
-  /// 服务端时刻表到达时刻 `HH:mm`（planner.js toLocation）。为空 → UI 回退 `_slots()` 推算（FX-02 验收②）
+  /// 服务端时刻表到达时刻 `HH:mm`（planner.js toLocation）。
+  ///
+  /// 它是 `itinerary_checker.dart` 重建当日时刻链的**唯一锚**：
+  /// 首站缺它 → 整条时间链不可靠，CH-01/02/06/07/08 全部跳过。
+  ///
+  /// ⛔ 早期实现曾用「回退 9:00 起点累加」兜底 —— 那是编造起点，违反三铁律，已移除；
+  ///    现在的正确行为是**不推算**，由 CH-09 日级披露"未校验"。
   String? arrivalTime;
   /// 服务端时刻表离开时刻 `HH:mm`
   String? leaveTime;
@@ -261,6 +319,34 @@ class Location {
   /// `null` = 未补录（**与 0 不同**：0 表示用户明确填了「这项没花钱」）。
   int? manualCost;
 
+  // ---- T03 新增：日期感知营业事实（全部**进** toJson/fromJson，要云同步）----
+  //
+  // ⛔ 这五个字段是**绑定某个具体日期**的结论（服务端 `buildDay(dateStr)` 才解析）。
+  //    日期变化 / 地点跨日移动后必须整体清空（见 `clearOpenHoursFacts()`），
+  //    把旧日期结论搬到新日期 = 编造数据。
+  /// 与营业结论对应的**原文命中子句**（服务端 `openHoursRaw`，原样切片，不得改写）。
+  ///
+  /// null = 无可靠证据（解析失败 / 旧数据）。
+  /// UI 副行只在非 null 时展示 —— 来源透明第三层：无证据时不展示结构化结论。
+  String? openHoursRaw;
+  /// 停止检票/入馆/入园时刻 `HH:mm`。
+  ///
+  /// null = 该场所没有停止入场要求，**或**无法唯一解析 —— 两者在客户端不可区分，
+  /// 也无需区分：CH-01 在 null 时退回到用 `closeTime` 判「打烊」。
+  String? lastEntryTime;
+  /// 目标日期是否闭馆：**三态** —— true=明确关闭 / false=明确命中开放段 / null=未知。
+  ///
+  /// ⛔ **null 绝不当 false**。这是本次修复的核心陷阱之一：
+  /// 服务端曾用 `String(poi.biz_ext.opentime)` 把 `undefined` / `[]` 当成有效源，
+  /// 使「未知」被当成「有营业时间」，进而产生阻塞级假阳性。
+  bool? closedOnDate;
+  /// 多时段营业段（服务端 `openSegments`）。单时段也会产出长度 1 的列表。
+  ///
+  /// 多时段时 `openTime/closeTime` 恒为 null，时段信息只由本字段承载；
+  /// CH-01/02 因营业结构不完整而跳过，走 CH-09 日级披露。
+  /// null = 旧数据 / 服务端未下发（**与 `[]` 不同**：`[]` 是"明确无时段"）。
+  List<OpenSegment>? openSegments;
+
   Location({
     String? id,
     required this.name,
@@ -286,7 +372,25 @@ class Location {
     this.cost,
     this.fixed = false,
     this.manualCost,
+    // ---- T03 新增：营业事实（默认 null = 未知，不填默认值）----
+    this.openHoursRaw,
+    this.lastEntryTime,
+    this.closedOnDate,
+    this.openSegments,
   }) : id = id ?? const Uuid().v4();
+
+  /// 清空「针对某个日期」的营业事实（T04：日期变化 / 跨日移动后调用）。
+  ///
+  /// 营业时间是**日期感知**的：旧日期的解析结论搬到新日期就是假数据。
+  /// 按三铁律必须清空并走 CH-09 日级披露 —— **不联网补查、不回填默认营业时间**。
+  void clearOpenHoursFacts() {
+    openTime = null;
+    closeTime = null;
+    lastEntryTime = null;
+    closedOnDate = null;
+    openHoursRaw = null;
+    openSegments = null;
+  }
 
   /// 获取城市名称，优先使用POI返回的city，否则从address解析
   String get cityName {
@@ -339,6 +443,12 @@ class Location {
     'cost': cost,
     'fixed': fixed,
     'manualCost': manualCost,
+    // ---- T03 新增：营业事实同步（要云同步，故必须进 toJson）----
+    'openHoursRaw': openHoursRaw,
+    'lastEntryTime': lastEntryTime,
+    // 客户端命名 `closedOnDate`（服务端别名 `closedOnThisDate` 只在 fromJson 兼容读取）
+    'closedOnDate': closedOnDate,
+    'openSegments': openSegments?.map((s) => s.toJson()).toList(),
   };
 
   /// 🔒 [address] 声明为非空 `String`，故从 JSON 取值**必须**做 null 兜底。
@@ -378,8 +488,26 @@ class Location {
     // `as num?` 而非 `as int?`：云同步往返经 JSON 后整数可能被带成小数，
     // 直接 as int? 会抛；旧数据缺该字段 → null（未补录），向后兼容。
     manualCost: (json['manualCost'] as num?)?.round(),
+    // ---- T03 新增：向后兼容 —— 旧 JSON 缺这四个键一律 null，不抛、不兜底 ----
+    openHoursRaw: json['openHoursRaw'] as String?,
+    lastEntryTime: json['lastEntryTime'] as String?,
+    // 服务端 payload 用 `closedOnThisDate`，客户端用 `closedOnDate`：两个键都读。
+    // ⛔ 必须 `v is bool` 判定：真/假/未知是三态，非 bool 一律当**未知**，
+    //    绝不能写成 `== true`（那会把 null 折叠成 false，正是本次要修的陷阱）。
+    closedOnDate: _readTriStateBool(json['closedOnDate'] ?? json['closedOnThisDate']),
+    openSegments: (json['openSegments'] as List?)
+        ?.map(OpenSegment.tryFromJson)
+        .whereType<OpenSegment>()
+        .toList(),
   );
 }
+
+/// 三态布尔读取：只有真正的 `bool` 才被接受，其余（null / 数字 / 字符串）一律「未知」。
+///
+/// 单独抽成函数是因为这个判定在 `fromJson` 里只有一处、却最容易写错：
+/// 写成 `json[k] == true` 会把 null 悄悄折叠成 false，
+/// 而本次修复的核心正是「`closedOnDate == null` 不得当成没闭馆」。
+bool? _readTriStateBool(dynamic v) => (v is bool) ? v : null;
 
 class Transport {
   final String id;

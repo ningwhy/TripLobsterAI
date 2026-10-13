@@ -145,6 +145,12 @@ class _AiPlanPageState extends State<AiPlanPage> {
     return keys.any((k) => name.contains(k) || k.contains(name));
   }
 
+  /// 三态布尔：`closedOnThisDate` 只有真正的 bool 才接受，其余一律「未知」。
+  ///
+  /// ⛔ 不得写成 `== true`：那会把 null（未知）折叠成 false（明确开放），
+  ///    正是本次要消除的假阳性来源。
+  bool? _readTriState(dynamic raw) => (raw is bool) ? raw : null;
+
   /// 交通段映射（服务端 planner.js toLocation / multiCity.js 产出）
   Transport? _buildTransport(dynamic raw) {
     if (raw is! Map) return null;
@@ -220,7 +226,9 @@ class _AiPlanPageState extends State<AiPlanPage> {
                 .toList(),
             // ---- T02 补映射：把服务端已产出的字段接进模型（缺则保持 null，不编造）----
             // 注：generate 管线**不产出** arrivalTime/leaveTime（那是 corridor 管线的能力），
-            //     这两个字段在 AI 生成行程里恒为 null，预览页会回退 _slots() 推算 —— 预期行为。
+            //     这两个字段在 AI 生成行程里恒为 null → 预览页时间链无锚，
+            //     依赖时刻的规则（CH-01/02/06/07/08）全部跳过、只做 CH-09 披露。
+            //     ⛔ 这是**预期行为**，不是 bug：没有锚就不该推算（推算=编造起点）。
             arrivalTime: loc['arrivalTime'] as String?,
             leaveTime: loc['leaveTime'] as String?,
             rating: (loc['rating'] as num?)?.toDouble(),
@@ -230,6 +238,18 @@ class _AiPlanPageState extends State<AiPlanPage> {
             // 【裁 4】必去点由**客户端**按 mustVisit 名称命中，不读服务端 _must（经 buildDay 后恒 false）
             fixed: _isMustVisit(loc['name']?.toString() ?? ''),
             transport: _buildTransport(loc['transport']),
+            // ---- T03 补映射：日期感知营业事实（服务端 `toLocation()` 下发）----
+            // ⛔ 这里是「采纳生成结果」的唯一入口，漏一个字段就会让整条
+            //    可执行性校验链路静默失效（卡片永远没提示，用户以为校验过了）。
+            //    缺值一律保持 null —— 不估算、不兜底、不编造营业时间。
+            openHoursRaw: loc['openHoursRaw'] as String?,
+            lastEntryTime: loc['lastEntryTime'] as String?,
+            // 服务端键 `closedOnThisDate` → 客户端字段 `closedOnDate`（三态）。
+            closedOnDate: _readTriState(loc['closedOnThisDate'] ?? loc['closedOnDate']),
+            openSegments: (loc['openSegments'] as List?)
+                ?.map(OpenSegment.tryFromJson)
+                .whereType<OpenSegment>()
+                .toList(),
           );
         }).toList(),
       );

@@ -5,7 +5,9 @@ import 'package:trip_planner/models/trip_models.dart';
 import 'package:trip_planner/services/price_source.dart';
 import 'package:trip_planner/theme/preview_theme.dart';
 import 'package:trip_planner/utils/cost_aggregator.dart';
+import 'package:trip_planner/utils/itinerary_checker.dart';
 import 'package:trip_planner/widgets/timeline/day_cost_bar.dart';
+import 'package:trip_planner/widgets/timeline/issue_note.dart';
 import 'package:trip_planner/widgets/timeline/location_card.dart';
 import 'package:trip_planner/widgets/timeline/price_refresh_bar.dart';
 
@@ -416,6 +418,132 @@ void main() {
       );
       expect(none.manualCost, isNull); // 未补录
       expect(zero.manualCost, 0); // 用户明确填了"这项没花钱"
+    });
+  });
+
+  // ==================================================================
+  // T04：三级提示渲染契约
+  //
+  // 锁死「改 UI 但没防线」的缺口：红框只属于 blocking、提醒不描边、
+  // 同地点一条、营业问题带原文副行。这四条一旦回归就是**用户可见的错误**
+  // （把"需留意"渲染成"排不下"，或把未取到营业时间渲染成"已通过"）。
+  // ==================================================================
+  group('LocationCard 三级提示（T04）', () {
+    Location poi({
+      String name = '故宫',
+      String? openTime,
+      String? closeTime,
+      String? lastEntryTime,
+      bool? closedOnDate,
+      String? openHoursRaw,
+    }) =>
+        Location(
+          name: name,
+          address: '北京市东城区',
+          type: LocationType.attraction,
+          openTime: openTime,
+          closeTime: closeTime,
+          lastEntryTime: lastEntryTime,
+          closedOnDate: closedOnDate,
+          openHoursRaw: openHoursRaw,
+          stayMinutes: 120,
+        );
+
+    Widget card(Location loc, ItineraryIssue? issue) => wrap(
+          LocationCard(
+            location: loc,
+            showPrice: false,
+            issue: issue,
+            onTap: () {},
+            onOta: () {},
+            onEditStay: () {},
+            onRemove: () {},
+          ),
+        );
+
+    /// 卡片外框（唯一带 `Border` 的 Container 就是卡片本体）
+    Border? borderOf(WidgetTester tester) {
+      for (final c in tester.widgetList<Container>(find.byType(Container))) {
+        final d = c.decoration;
+        if (d is BoxDecoration && d.border is Border) return d.border as Border;
+      }
+      return null;
+    }
+
+    const blocking = ItineraryIssue(
+      code: ItineraryIssueCode.ch01LateEntry,
+      severity: IssueSeverity.blocking,
+      dayNumber: 1,
+      locationId: 'x',
+      message: '16:50 到达晚于停止入场 16:00，无法入园',
+      sourceRaw: '08:30-17:00，16:00 停止检票',
+    );
+    const reminder = ItineraryIssue(
+      code: ItineraryIssueCode.ch02EarlyArrival,
+      severity: IssueSeverity.reminder,
+      dayNumber: 1,
+      locationId: 'x',
+      message: '08:05 到达早于 08:30 开门，需等 25 分钟',
+      sourceRaw: '08:30-17:00',
+    );
+
+    testWidgets('blocking：描红边 + 显示提示行', (tester) async {
+      await tester.pumpWidget(card(poi(), blocking));
+
+      final border = borderOf(tester);
+      expect(border, isNotNull);
+      expect(border!.top.color, PreviewColors.conflictBorder);
+      expect(border.top.width, 1.5);
+      expect(find.byType(IssueNote), findsOneWidget);
+      expect(find.text('16:50 到达晚于停止入场 16:00，无法入园'), findsOneWidget);
+    });
+
+    testWidgets('reminder：**不描边**，只有提示行（灰底橙字）', (tester) async {
+      await tester.pumpWidget(card(poi(), reminder));
+
+      final border = borderOf(tester);
+      expect(border, isNotNull);
+      expect(border!.top.color, PreviewColors.line);
+      expect(border.top.width, 1);
+      expect(find.byType(IssueNote), findsOneWidget);
+      expect(find.text('08:05 到达早于 08:30 开门，需等 25 分钟'), findsOneWidget);
+    });
+
+    testWidgets('同地点只渲染一条提示（去重已在 checker 完成，widget 不再判断）',
+        (tester) async {
+      await tester.pumpWidget(card(poi(), blocking));
+
+      // 卡片拿到的是**单条** issue，不存在第二条
+      expect(find.byType(IssueNote), findsOneWidget);
+    });
+
+    testWidgets('营业问题的原文副行：原样切片，不反拼', (tester) async {
+      final p = poi(openTime: '08:30', closeTime: '17:00', lastEntryTime: '16:00', closedOnDate: false, openHoursRaw: '08:30-17:00，16:00 停止检票');
+      await tester.pumpWidget(card(p, blocking));
+
+      expect(find.text('原文：08:30-17:00，16:00 停止检票'), findsOneWidget);
+      // 结构化值照常显示在 meta（营业/停止入场），与原文副行**互不替代**
+      expect(find.textContaining('营业 08:30-17:00'), findsOneWidget);
+      // meta 与提示主句都会出现"停止入场 16:00"（两处在说同一事实，不是重复问题）
+      expect(find.textContaining('停止入场 16:00'), findsWidgets);
+    });
+
+    testWidgets('无 issue：不渲染任何提示，也不渲染"已校验通过"', (tester) async {
+      await tester.pumpWidget(card(poi(), null));
+
+      expect(find.byType(IssueNote), findsNothing);
+      expect(find.textContaining('已校验通过'), findsNothing);
+      expect(find.textContaining('校验通过'), findsNothing);
+      final border = borderOf(tester);
+      expect(border!.top.color, PreviewColors.line);
+    });
+
+    testWidgets('无营业时间时 meta 不出现"营业 null"这类脏片段', (tester) async {
+      // 多时段 / 解析失败 → openTime/closeTime 全 null；此时 meta **不写**营业段
+      await tester.pumpWidget(card(poi(), null));
+
+      expect(find.textContaining('营业'), findsNothing);
+      expect(find.textContaining('null'), findsNothing);
     });
   });
 }

@@ -48,6 +48,16 @@ class PreviewColors {
 
   // ---- 语义：营业时间冲突（卡片描边红框，与价格徽章红框不得共用）----
   static const conflictBorder = Color(0xFFE5533D);
+
+  // ---- 语义：可执行性提示三级（T04）----
+  //
+  // 与价格徽章的红态色**不得共用**：那是价格区的另一套语义（且本轮恒未启用），
+  // 本组表示"行程排不下/赶不上"，语义不同、来源不同，混用会让用户误读。
+  static const issueBlockingText = Color(0xFFC0392B); // blocking 文字
+  static const issueBlockingBg = Color(0xFFFFF1EF); // blocking 底
+  static const issueReminderText = Color(0xFFB26A00); // reminder 文字（橙）
+  static const issueReminderBg = Color(0xFFF4F7FA); // reminder 底（灰）
+  static const issueNeutralText = Color(0xFF8A97A5); // neutral（CH-09 日级灰字）
 }
 
 /// 预览页文本样式（避免每个 widget 各写一份）
@@ -187,4 +197,22 @@ class PreviewStrings {
   static String otaConfirm(String name, {String platform = '携程'}) =>
       '将跳转到$platform查看「$name」，价格以平台实时页面为准';
   static const inviteTodo = '邀请功能开发中，可先分享行程海报';
+
+  // ---------------- 可执行性提示（T04）----------------
+  //
+  // ⛔ 硬约束：提示文案必须含**可核对的具体时刻/分钟**，禁止「可能有问题」这类模糊表达。
+  // 具体规则主句由 `itinerary_checker.dart` 生成（含时刻数字），本文件只放**固定短标签**。
+
+  /// 日级摘要：有阻塞时（阻塞优先，不叠加提醒计数）
+  static const daySummaryBlocking = '当日有排不下的安排';
+
+  /// 日级摘要：无阻塞但有提醒时
+  static String daySummaryReminder(int count) => '当日有 $count 处需留意';
+
+  /// 营业时间原文副行前缀（副行是**证据**，不是第二条问题）
+  static const openHoursSourcePrefix = '原文：';
+
+  // ⛔ 这里**不定义** CH-09 的文案：它是规则主句，由 `itinerary_checker.dart` 生成。
+  //    两处各写一份必然漂移（改了 checker 忘了改这里），而"未校验"这句话
+  //    恰恰是最不能说错的 —— 单一来源。
 }

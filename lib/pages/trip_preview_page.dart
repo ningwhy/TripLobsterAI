@@ -12,12 +12,14 @@ import '../theme/preview_theme.dart';
 import '../utils/cost_aggregator.dart';
 import '../utils/date_fix.dart';
 import '../utils/day_anchor.dart';
+import '../utils/itinerary_checker.dart';
 import '../utils/ota_deeplink.dart';
 import '../providers/trip_provider.dart';
 import '../widgets/timeline/day_anchor_table.dart';
 import '../widgets/timeline/day_cost_bar.dart';
 import '../widgets/timeline/day_group_header.dart';
 import '../widgets/timeline/day_strip.dart';
+import '../widgets/timeline/issue_note.dart';
 import '../widgets/timeline/location_card.dart';
 import '../widgets/timeline/members_bar.dart';
 import '../widgets/timeline/price_refresh_bar.dart';
@@ -54,13 +56,9 @@ class TripPreviewPage extends StatefulWidget {
   State<TripPreviewPage> createState() => _TripPreviewPageState();
 }
 
-class _Slot {
-  final Location location;
-  final int arrival; // 分钟
-  final int leave;
-  final int? travelMinutes;
-  _Slot(this.location, this.arrival, this.leave, this.travelMinutes);
-}
+// 【T04】已删除本页私有的 `_Slot / _slots() / _isConflict()`：
+// 时刻重建与可执行性判据统一由 `itinerary_checker.dart` 提供（纯函数、可测、不依赖 context）。
+// 保留两套推算逻辑是本次要消除的**第四处死逻辑**（旧判据只读 closeTime 的首段时刻）。
 
 class _TripPreviewPageState extends State<TripPreviewPage> {
   int _activeDayIndex = 0;
@@ -154,60 +152,6 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
 
   PriceQuote? _quoteOf(Location loc) =>
       _prices.snapshot[PriceRepositoryKey.of(loc.city, loc.name)];
-
-  /// 营业时间冲突（红框）：到达 + 停留 超出 closeTime
-  bool _isConflict(Location loc, _Slot slot) {
-    final close = loc.closeTime;
-    if (close == null) return false;
-    final parts = close.split(':');
-    if (parts.length < 2) return false;
-    final h = int.tryParse(parts[0]);
-    final m = int.tryParse(parts[1]);
-    if (h == null || m == null) return false;
-    return slot.leave > h * 60 + m;
-  }
-
-  // ---------------- 时刻推算（服务端 arrivalTime 优先）----------------
-
-  String _fmt(int min) {
-    final m = ((min % 1440) + 1440) % 1440;
-    return '${(m ~/ 60).toString().padLeft(2, '0')}:${(m % 60).toString().padLeft(2, '0')}';
-  }
-
-  String _dur(int min) {
-    final h = min ~/ 60;
-    final m = min % 60;
-    if (h == 0) return '$m分钟';
-    return m == 0 ? '$h小时' : '$h小时$m分';
-  }
-
-  /// 时刻表：服务端 `arrivalTime` 非空则直接用；否则回退 9:00 累加（FX-02 验收②）
-  List<_Slot> _slots(TripDay day) {
-    var clock = 9 * 60;
-    final out = <_Slot>[];
-    for (final loc in day.locations) {
-      final travel = (loc.transportMinutes != null && loc.transportMinutes! > 0) ? loc.transportMinutes : null;
-      if (travel != null) clock += travel;
-      final stay = loc.stayMinutes ?? 60;
-      final serverArrival = _toMin(loc.arrivalTime);
-      final arrival = serverArrival ?? clock;
-      final serverLeave = _toMin(loc.leaveTime);
-      final leave = serverLeave ?? (arrival + stay);
-      out.add(_Slot(loc, arrival, leave, travel));
-      clock = leave;
-    }
-    return out;
-  }
-
-  int? _toMin(String? hhmm) {
-    if (hhmm == null || hhmm.isEmpty) return null;
-    final p = hhmm.split(':');
-    if (p.length < 2) return null;
-    final h = int.tryParse(p[0]);
-    final m = int.tryParse(p[1]);
-    if (h == null || m == null) return null;
-    return h * 60 + m;
-  }
 
   // ---------------- 交互 ----------------
 
@@ -396,7 +340,10 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
   }
 
   Widget _buildDaySection(int index, TripDay day) {
-    final slots = _slots(day);
+    // 【T04】当日只算一次校验结果：checker 会重建整条时刻链，
+    // 若在每张卡片里各调一次就是 O(n²)，且同一天可能算出两份不同结论。
+    final result = checkItineraryDay(day);
+    final slots = result.slots;
     final isTripStartDay = day.dayNumber == 1;
 
     final rows = <Widget>[];
@@ -405,16 +352,19 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
       final loc = s.location;
       rows.add(
         TimelineRow(
-          timeText: _fmt(s.arrival),
+          // ⛔ 不用 `% 1440` 后再显示：跨午夜时 1470 分钟要显示"次日 00:30"，
+          //    绕回成 00:30 会让用户以为当天凌晨就结束了（CH-04 的意义正在于此）。
+          timeText: _clockText(s.arrival),
           dotColor: TimelineRow.dotColorOf(loc, isTripStart: isTripStartDay && k == 0),
           child: LocationCard(
             location: loc,
-            arrivalText: _fmt(s.arrival),
-            leaveText: _fmt(s.leave),
+            arrivalText: _clockText(s.arrival),
+            leaveText: _clockText(s.leave),
             quote: _quoteOf(loc),
             // 酒店/景点本轮无价格源 → 不渲染徽章（渲染出来必然是"暂无参考价"，是噪音）
             showPrice: _priceSource.supports(loc),
-            conflict: _isConflict(loc, s),
+            // 该地点的唯一主问题（去重已在 checker 内完成）
+            issue: primaryIssueForLocation(result, loc.id),
             onTap: () => _showLocationSheet(loc),
             onOta: () => _openOta(loc),
             onEditStay: () => _editStay(loc),
@@ -447,12 +397,63 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
           weather: _weather.peek(day),
           weatherLoading: _weather.isPending(day),
         ),
+        // 日级摘要内联在此（不新增组件、不新增页面）：
+        // 阻塞摘要 → 提醒计数 → CH-09 灰字；完全无问题时**零高度**。
+        _buildDaySummary(result),
         if (slots.isEmpty)
           _buildEmptyDay()
         else
           TimelineBlock(rows: rows),
         DayCostBar(cost: _costOf(day)),
       ],
+    );
+  }
+
+  /// 时刻文本；时刻未知（时间链无锚）时返回空串，**不显示 00:00 之类的假值**。
+  String _clockText(int? minutes) =>
+      minutes == null ? '' : formatClockMinutes(minutes);
+
+  /// 日级摘要（T04）
+  ///
+  /// 规则（设计 §1.4）：
+  /// - 有阻塞 → 只显示阻塞摘要（**不叠加**提醒计数，避免"3 条"这种需要心算的数字）；
+  /// - 无阻塞有提醒 → 显示提醒计数；
+  /// - CH-09 灰字**始终**是最后一行（它是"没校验"的声明，不是问题）；
+  /// - 完全无问题 → `SizedBox.shrink()`（零高度）。
+  ///
+  /// ⛔ **不渲染「已校验通过」**：没有提示只表示本设计列出的规则未触发，
+  ///    不代表现实行程得到保证（设计 §1.6 语义第五问）。
+  Widget _buildDaySummary(DayCheckResult result) {
+    if (!result.hasAnyIssue) return const SizedBox.shrink();
+
+    final rows = <Widget>[];
+    if (result.blockingCount > 0) {
+      rows.add(
+        IssueNote(
+          severity: IssueSeverity.blocking,
+          text: '${PreviewStrings.daySummaryBlocking}（${result.blockingCount} 处）',
+        ),
+      );
+    } else if (result.reminderCount > 0) {
+      rows.add(
+        IssueNote(
+          severity: IssueSeverity.reminder,
+          text: PreviewStrings.daySummaryReminder(result.reminderCount),
+        ),
+      );
+    }
+    for (final issue in result.displayIssues) {
+      if (issue.code != ItineraryIssueCode.ch09OpenHoursUnknown) continue;
+      // 文案来自 checker（单一来源）：改了规则不会产生"摘要说 1 个、卡片说 2 个"的漂移
+      rows.add(IssueNote(severity: IssueSeverity.neutral, text: issue.message));
+    }
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(12, 6, 12, 0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: rows,
+      ),
     );
   }
 
@@ -629,9 +630,22 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
     _showPosterSheet();
   }
 
-  void _openEdit() {
-    context.read<TripProvider>().setCurrentTrip(widget.trip);
-    Navigator.push(context, MaterialPageRoute(builder: (_) => TripCreatePage(trip: widget.trip)));
+  /// 进入完整编辑页（T04：await 返回后重算可执行性提示）
+  ///
+  /// ⛔ async 纪律：**第一个 await 之前**捕获 Provider；await 之后先
+  ///    `if (!mounted) return;` 再用 context / setState。
+  ///
+  /// 编辑页会改日期、改顺序、挪动地点 —— 返回后**必须**重建锚点表并触发重算，
+  /// 否则用户看到的是编辑前的提示（比没有提示更糟：他会以为改了没用）。
+  Future<void> _openEdit() async {
+    final provider = context.read<TripProvider>();
+    provider.setCurrentTrip(widget.trip);
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => TripCreatePage(trip: widget.trip)),
+    );
+    if (!mounted) return;
+    setState(_anchor.markDirty);
   }
 
   Future<void> _saveTrip() async {
@@ -812,7 +826,7 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
                 children: options.map((m) {
                   final selected = loc.stayMinutes == m;
                   return ChoiceChip(
-                    label: Text(_dur(m)),
+                    label: Text(formatDurationMinutes(m)),
                     selected: selected,
                     onSelected: (_) async {
                       Navigator.pop(ctx);

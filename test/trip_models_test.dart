@@ -302,4 +302,170 @@ void main() {
       expect(loc.type, LocationType.other);
     });
   });
+
+  // ==========================================================================
+  // T03：日期感知营业事实（openHoursRaw / lastEntryTime / closedOnDate / openSegments）
+  // ==========================================================================
+  group('Location 营业事实字段（T03）', () {
+    test('四个新字段全部进 toJson（要云同步，漏一个就丢一条链路）', () {
+      final loc = Location(
+        name: '故宫博物院',
+        address: '北京市东城区景山前街4号',
+        type: LocationType.attraction,
+        openTime: '08:30',
+        closeTime: '17:00',
+        lastEntryTime: '16:00',
+        closedOnDate: false,
+        openHoursRaw: '旺季 08:30-17:00，16:00 停止检票',
+        openSegments: const [OpenSegment(open: '08:30', close: '17:00', lastEntry: '16:00')],
+      );
+
+      final json = loc.toJson();
+      expect(json['lastEntryTime'], '16:00');
+      expect(json['closedOnDate'], false);
+      expect(json['openHoursRaw'], '旺季 08:30-17:00，16:00 停止检票');
+      expect(json['openSegments'], isA<List>());
+      expect((json['openSegments'] as List).length, 1);
+      expect((json['openSegments'] as List).first['open'], '08:30');
+    });
+
+    test('云同步往返：四个新字段一个都不丢', () {
+      final loc = Location(
+        name: '苏州博物馆',
+        address: '苏州市姑苏区',
+        type: LocationType.attraction,
+        closedOnDate: true,
+        openHoursRaw: '周一闭馆',
+        openSegments: const [OpenSegment(open: '09:00', close: '17:00')],
+      );
+      final restored = Location.fromJson(loc.toJson());
+
+      expect(restored.closedOnDate, true);
+      expect(restored.openHoursRaw, '周一闭馆');
+      expect(restored.lastEntryTime, isNull);
+      expect(restored.openSegments?.length, 1);
+      expect(restored.openSegments!.first.close, '17:00');
+    });
+
+    test('旧 JSON 缺四个新键 → 全 null，不抛异常', () {
+      // 这是"老行程"的真实形态：服务端还没下发营业事实时的存量数据。
+      // 期望是 null（未知 → CH-09），**不是** false / 空串 / 空数组。
+      final loc = Location.fromJson({
+        'id': 'OLD-1',
+        'name': '老行程景点',
+        'address': '某地',
+        'type': 'attraction',
+        'openTime': '08:00',
+        'closeTime': '18:00',
+      });
+
+      expect(loc.openHoursRaw, isNull);
+      expect(loc.lastEntryTime, isNull);
+      expect(loc.closedOnDate, isNull);
+      expect(loc.openSegments, isNull);
+    });
+
+    test('fromJson 兼容服务端别名 closedOnThisDate', () {
+      final closed = Location.fromJson({
+        'name': '国博',
+        'type': 'attraction',
+        'closedOnThisDate': true,
+        'openHoursRaw': '周一闭馆（法定节假日除外）',
+      });
+      expect(closed.closedOnDate, true);
+
+      final open = Location.fromJson({
+        'name': '国博',
+        'type': 'attraction',
+        'closedOnThisDate': false,
+        'openTime': '09:00',
+        'closeTime': '17:00',
+        'openHoursRaw': '09:00-17:00',
+      });
+      expect(open.closedOnDate, false);
+    });
+
+    test('closedOnDate 三态：非 bool 值一律当未知，绝不折叠成 false', () {
+      // 三态是本次修复的核心：null 表示"没校验"，绝不等于 false（明确开放）。
+      expect(Location.fromJson({'name': 'a', 'closedOnDate': null}).closedOnDate, isNull);
+      expect(Location.fromJson({'name': 'a', 'closedOnDate': 0}).closedOnDate, isNull);
+      expect(Location.fromJson({'name': 'a', 'closedOnDate': 'false'}).closedOnDate, isNull);
+      expect(Location.fromJson({'name': 'a', 'closedOnDate': []}).closedOnDate, isNull);
+    });
+
+    test('openSegments 缺 open 或 close 的脏元素被丢弃，不补空串占位', () {
+      final loc = Location.fromJson({
+        'name': '多时段餐厅',
+        'type': 'restaurant',
+        'openSegments': [
+          {'open': '11:00', 'close': '14:00'},
+          {'open': '16:00'}, // 缺 close → 丢弃
+          {'close': '22:00'}, // 缺 open  → 丢弃
+          'not-a-map', // 类型不对   → 丢弃
+        ],
+      });
+      expect(loc.openSegments?.length, 1);
+      expect(loc.openSegments!.single.open, '11:00');
+      expect(loc.openSegments!.single.close, '14:00');
+      expect(loc.openSegments!.single.lastEntry, isNull);
+    });
+
+    test('clearOpenHoursFacts 清空全部营业事实（改日期后不得沿用旧结论）', () {
+      final loc = Location(
+        name: '故宫',
+        address: '北京',
+        type: LocationType.attraction,
+        openTime: '08:30',
+        closeTime: '17:00',
+        lastEntryTime: '16:00',
+        closedOnDate: false,
+        openHoursRaw: '旺季 08:30-17:00',
+        openSegments: const [OpenSegment(open: '08:30', close: '17:00')],
+      );
+
+      loc.clearOpenHoursFacts();
+
+      expect(loc.openTime, isNull);
+      expect(loc.closeTime, isNull);
+      expect(loc.lastEntryTime, isNull);
+      expect(loc.closedOnDate, isNull);
+      expect(loc.openHoursRaw, isNull);
+      expect(loc.openSegments, isNull);
+    });
+
+    test('Trip 整体往返：新字段随 Location 一起云同步', () {
+      final trip = Trip(
+        name: '北京2日',
+        startDate: DateTime(2026, 10, 13),
+        endDate: DateTime(2026, 10, 14),
+        days: [
+          TripDay(
+            date: DateTime(2026, 10, 13),
+            dayNumber: 1,
+            locations: [
+              Location(
+                name: '故宫',
+                address: '北京',
+                type: LocationType.attraction,
+                arrivalTime: '09:00',
+                openTime: '08:30',
+                closeTime: '17:00',
+                lastEntryTime: '16:00',
+                closedOnDate: false,
+                openHoursRaw: '08:30-17:00，16:00 停止检票',
+                openSegments: const [OpenSegment(open: '08:30', close: '17:00', lastEntry: '16:00')],
+              ),
+            ],
+          ),
+        ],
+      );
+
+      final restored = Trip.fromJson(trip.toJson());
+      final loc = restored.days.first.locations.first;
+      expect(loc.lastEntryTime, '16:00');
+      expect(loc.closedOnDate, false);
+      expect(loc.openHoursRaw, '08:30-17:00，16:00 停止检票');
+      expect(loc.openSegments?.single.lastEntry, '16:00');
+    });
+  });
 }

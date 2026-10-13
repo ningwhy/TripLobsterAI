@@ -4,7 +4,9 @@ import '../../models/price_quote.dart';
 import '../../models/trip_models.dart';
 import '../../theme/preview_theme.dart';
 import '../../utils/cost_aggregator.dart';
+import '../../utils/itinerary_checker.dart';
 import '../../utils/ota_deeplink.dart';
+import 'issue_note.dart';
 import 'price_badge.dart';
 
 /// 地点卡（四层信息）
@@ -33,8 +35,15 @@ class LocationCard extends StatelessWidget {
   /// false → 不渲染徽章（酒店 / 景点本轮无数据源，渲染出来必然是"暂无参考价"，是噪音）。
   final bool showPrice;
 
-  /// 营业时间冲突（到达+停留 超出 closeTime）
-  final bool conflict;
+  /// 该地点的**唯一**主问题（T04：由 `checkItineraryDay` 产出、页面传入）。
+  ///
+  /// null = 本设计列出的规则对该地点没有产出问题。
+  ///
+  /// ⛔ **不要**把它理解成"校验通过"：没有提示只表示列出的规则没触发，
+  ///    不代表现实行程没问题 —— 所以页面**不渲染**「已校验通过」。
+  ///
+  /// ⛔ 中性级（CH-09）**不会**出现在这里：它是日级声明，不上卡片。
+  final ItineraryIssue? issue;
 
   final VoidCallback onTap;
   final VoidCallback onOta;
@@ -63,7 +72,7 @@ class LocationCard extends StatelessWidget {
     this.leaveText,
     this.quote,
     this.showPrice = true,
-    this.conflict = false,
+    this.issue,
     required this.onTap,
     required this.onOta,
     required this.onEditStay,
@@ -86,7 +95,9 @@ class LocationCard extends StatelessWidget {
         decoration: BoxDecoration(
           color: PreviewColors.cardBg,
           borderRadius: BorderRadius.circular(12),
-          border: conflict
+          // 只有**阻塞**描红边：提醒级不描边（否则三级提示视觉上糊成一片，
+          // 用户分不清哪个必须改）。红框语义专属于"排不下/赶不上"。
+          border: issue?.severity == IssueSeverity.blocking
               ? Border.all(color: PreviewColors.conflictBorder, width: 1.5)
               : Border.all(color: PreviewColors.line, width: 1),
         ),
@@ -139,6 +150,30 @@ class LocationCard extends StatelessWidget {
               overflow: TextOverflow.ellipsis,
               style: PreviewText.cardMeta,
             ),
+            // ②-bis 可执行性提示：**同地点最多一条**
+            //
+            // 去重由 `itinerary_checker.dart` 完成（severity 优先、同级按固定 code 优先级），
+            // 这里**不做第二次判断** —— widget 不持有业务判据（设计 §1.5）。
+            if (issue != null) ...[
+              const SizedBox(height: 6),
+              IssueNote(severity: issue!.severity, text: issue!.message),
+              // 证据副行：**不是第二条问题**，是让用户核对结论来源的原文切片。
+              // ⛔ 只显示服务端给的命中子句，**绝不**把结构化值反拼成"原文"
+              //    （反拼出来的东西看起来像原文，实际是我们造的）。
+              if (issue!.sourceRaw != null && issue!.sourceRaw!.trim().isNotEmpty) ...[
+                const SizedBox(height: 4),
+                Text(
+                  '${PreviewStrings.openHoursSourcePrefix}${issue!.sourceRaw}',
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: const TextStyle(
+                    fontSize: 10.5,
+                    height: 1.3,
+                    color: PreviewColors.dim,
+                  ),
+                ),
+              ],
+            ],
             // ③ 价格区（手填 与 参考价 **互斥**，不同时显示）
             //
             // 互斥理由：两者若并列，用户会以为「当日已计价」把它们**都**算了进去，
@@ -266,8 +301,15 @@ class LocationCard extends StatelessWidget {
     if (arrivalTimeOf(loc) != null) bits.add(arrivalTimeOf(loc)!);
     final stay = loc.stayMinutes;
     if (stay != null && stay > 0) bits.add('停留${_dur(stay)}');
+    // 营业时间是**目标日期**的解析结论（服务端 `parseOpenTime(poi,date)`）：
+    // 只有服务端唯一命中某一时段时才会有值；多时段 / 解析失败 → 全 null，
+    // 此时**不显示任何营业片段**（显示 "营业 null-null" 或部分信息都是误导）。
     if (loc.openTime != null && loc.closeTime != null) {
       bits.add('营业 ${loc.openTime}-${loc.closeTime}');
+    }
+    // 停止入场是**独立事实**，不是"营业时间"的一部分，单独成段更可核对
+    if (loc.lastEntryTime != null && loc.lastEntryTime!.isNotEmpty) {
+      bits.add('停止入场 ${loc.lastEntryTime}');
     }
     if (loc.stayNote != null && loc.stayNote!.isNotEmpty) bits.add(loc.stayNote!);
     final t = loc.transport;

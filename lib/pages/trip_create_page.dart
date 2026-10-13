@@ -875,6 +875,10 @@ class _TripCreatePageState extends State<TripCreatePage> {
     _dayOfLocation[loc.id] = picked ?? 1;
   }
 
+  /// 只比年月日：`DateTime` 带时分秒，直接 `==` 会把"同一天不同时刻"判为不同。
+  bool _isSameYmd(DateTime a, DateTime b) =>
+      a.year == b.year && a.month == b.month && a.day == b.day;
+
   void _saveTrip() {
     if (_nameController.text.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
@@ -886,6 +890,25 @@ class _TripCreatePageState extends State<TripCreatePage> {
     // 按“地点归属天”构建天数（点+线模型：点归属到天，线连接点）
     final dayCount = _endDate.difference(_startDate).inDays + 1;
     final fallbackDay = _isEditing ? dayCount : 1;
+
+    // ---- T04：日期/跨日归属变化 → 清空旧日期的营业事实 ----
+    //
+    // 营业时间是**日期感知**的（服务端 `parseOpenTime(poi, dateStr)` 按具体日期解析）：
+    // 出发日改了、或地点从第 1 天挪到第 2 天，旧结论就**不再是那条日期的事实**。
+    // 沿用它就是拿旧日期的数据冒充新日期 —— 属于编造，违反三铁律。
+    //
+    // ⛔ 清空后走预览页 CH-09 日级披露；**不联网补查、不回填默认营业时间**
+    //    （补查要另立数据源与配额契约，本轮不做）。
+    final previousDayOf = <String, int>{};
+    final startDateChanged = _isEditing && !_isSameYmd(widget.trip!.startDate, _startDate);
+    if (_isEditing) {
+      for (final day in widget.trip!.days) {
+        for (final loc in day.locations) {
+          previousDayOf[loc.id] = day.dayNumber;
+        }
+      }
+    }
+
     final days = <TripDay>[];
     for (var i = 0; i < dayCount; i++) {
       final dayNumber = i + 1;
@@ -896,6 +919,15 @@ class _TripCreatePageState extends State<TripCreatePage> {
             .where((l) => ((_dayOfLocation[l.id] ?? fallbackDay).clamp(1, dayCount)) == dayNumber)
             .toList(),
       ));
+    }
+
+    for (final loc in _locations) {
+      final newDay = (_dayOfLocation[loc.id] ?? fallbackDay).clamp(1, dayCount);
+      final oldDay = previousDayOf[loc.id];
+      final dayChanged = oldDay != null && oldDay != newDay;
+      if (startDateChanged || dayChanged) {
+        loc.clearOpenHoursFacts();
+      }
     }
 
     if (_isEditing) {
