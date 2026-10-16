@@ -262,6 +262,74 @@ for (const tz of ['UTC', 'Asia/Shanghai', 'America/New_York']) {
 process.env.TZ = savedTz;
 
 // ---------------------------------------------------------------------------
+// G. T05 回归防护：四轮历史假阳性红线（2026-10-14 QA 补锁）
+//
+// 本项目历史上出过三轮"显示错"。本节把每轮的触发原文固化为断言，
+// 防止修复被后续改动 silently 回退。
+// ---------------------------------------------------------------------------
+console.log('\n--- G. 历史假阳性回归防护（T05 补锁）---');
+
+// G1 风险①：多时段原文 —— 旧正则只取首段，"11:00-14:00 16:00-22:00" 曾让 19:00 到达
+// 被误报"已打烊"（餐厅 19:00 到 = 阻塞级错误）。C 节已覆盖解析，这里补 payload 契约：
+// 多时段时 openTime/closeTime 必须为 null（调用方不可能把首段打烊时刻当当日打烊时刻）。
+const g1Poi = normalizePoi({ id: 'G1', name: '原乡私厨饺子', location: '116.4,39.9', typecode: '050100',
+  biz_ext: { opentime2: '11:00-14:00 16:00-22:00' } });
+const g1 = parseOpenTime(g1Poi, '2026-10-13');
+check('G1 多时段：open=null, close=null（旧逻辑会给出 close=14:00）',
+  g1.open === null && g1.close === null, `open=${g1.open} close=${g1.close}`);
+check('G1 多时段：segments.length>=2', Array.isArray(g1.segments) && g1.segments.length >= 2,
+  JSON.stringify(segPairs(g1)));
+check('G1 多时段：19:00 到达判定营业中（防"已打烊"假阳性）',
+  withinAnySegment(g1, 19 * 60) === true);
+const g1Loc = toLocation(g1Poi, 720, 60, null, { openHours: g1 });
+check('G1 多时段 payload：openTime/closeTime 为 null（D12 复述，锁定契约）',
+  g1Loc.openTime === null && g1Loc.closeTime === null && g1Loc.openSegments.length === 2,
+  JSON.stringify({ o: g1Loc.openTime, c: g1Loc.closeTime, n: g1Loc.openSegments.length }));
+
+// G2 风险④：苏州博物馆尾部条款"……可根据需要临时闭馆，届时将告示公众"含"闭馆"
+// 但无星期、无日期 —— 旧逻辑判"每天都闭馆"（阻塞级假阳性）。
+// 修复（planner.js isScheduled）：纯关闭句必须带星期或日期区间才算排期闭馆。
+const SUZHOU = '开放时间:周二至周日9:00-17:00(16:00停止入馆)，周一全天闭馆(法定节假日除外)。' +
+  '如本馆遇有重大活动或重要设备设施维修保养时，可根据需要临时闭馆，届时将告示公众。';
+for (const d of ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17']) {
+  const r = parseOpenTime({ biz_ext: { opentime2: SUZHOU } }, d);
+  check(`G2 苏州博物馆 ${d}：closedOnThisDate 不得为 true（条件式临时闭馆≠排期闭馆）`,
+    r.closedOnThisDate !== true, `closed=${r.closedOnThisDate} reason=${r.reason}`);
+}
+const g2Wed = parseOpenTime({ biz_ext: { opentime2: SUZHOU } }, '2026-10-14');
+check('G2 苏州博物馆周三仍正常解析出营业段（不该因尾部条款整体放弃）',
+  g2Wed.open === '09:00' && g2Wed.close === '17:00' && g2Wed.closedOnThisDate === false,
+  `${g2Wed.open}-${g2Wed.close} closed=${g2Wed.closedOnThisDate}`);
+const g2Mon = parseOpenTime({ biz_ext: { opentime2: SUZHOU } }, '2026-10-12');
+// 注意：该原文的闭馆句自带「(法定节假日除外)」—— 无法在无权威日历时判断 10-12
+// 是否为例外假日，正确行为是**整体放弃返 null**（holiday_exception），
+// 既不谎报闭馆、也不谎报营业，客户端走 CH-09 诚实披露。排期闭馆路径的存活证明见 G3。
+check('G2 苏州博物馆周一：遇「法定节假日除外」限定 → 整体放弃返 null（不猜节假日日历）',
+  g2Mon.closedOnThisDate === null && g2Mon.reason === 'holiday_exception',
+  `closed=${g2Mon.closedOnThisDate} reason=${g2Mon.reason}`);
+
+// G3 风险③/CH-03 链路：故宫季节 + 星期双条件选段。周一 → 闭馆；旺季周三 → 08:30-17:00 且 lastEntry=16:00。
+const GUGONG = '旺季4月1日至10月31日 周二至周日 08:30-17:00 16:00停止检票，' +
+  '淡季11月1日至3月31日 周二至周日 08:30-16:30 15:30停止检票，周一全天关闭';
+const g3Mon = parseOpenTime({ biz_ext: { opentime2: GUGONG } }, '2026-10-12'); // 周一
+check('G3 故宫周一（2026-10-12）：closedOnThisDate=true',
+  g3Mon.closedOnThisDate === true && g3Mon.segments.length === 0, JSON.stringify(segPairs(g3Mon)));
+const g3Wed = parseOpenTime({ biz_ext: { opentime2: GUGONG } }, '2026-10-14'); // 周三·旺季
+check('G3 故宫旺季周三：open=08:30 close=17:00 lastEntry=16:00',
+  g3Wed.open === '08:30' && g3Wed.close === '17:00' && g3Wed.lastEntry === '16:00',
+  `${g3Wed.open}-${g3Wed.close} le=${g3Wed.lastEntry}`);
+const g3Winter = parseOpenTime({ biz_ext: { opentime2: GUGONG } }, '2026-11-11'); // 周三·淡季
+check('G3 故宫淡季周三：open=08:30 close=16:30 lastEntry=15:30（季节选段生效）',
+  g3Winter.open === '08:30' && g3Winter.close === '16:30' && g3Winter.lastEntry === '15:30',
+  `${g3Winter.open}-${g3Winter.close} le=${g3Winter.lastEntry}`);
+
+// G4 "24小时营业" → 确定性语义：00:00-24:00 单段，闭馆三态 false（不是未知）。
+const g4 = parseOpenTime({ biz_ext: { opentime2: '24小时营业' } }, '2026-10-13');
+check('G4 24小时营业：open=00:00 close=24:00 closedOnThisDate=false',
+  g4.open === '00:00' && g4.close === '24:00' && g4.closedOnThisDate === false,
+  `${g4.open}-${g4.close} closed=${g4.closedOnThisDate}`);
+
+// ---------------------------------------------------------------------------
 // 汇总
 // ---------------------------------------------------------------------------
 console.log('\n--- 语义类覆盖汇总（成功解析 / 保守放弃返 null）---');
