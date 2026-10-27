@@ -1,3 +1,8 @@
 node_modules/
-data/
+# ⚠️ 锚定到 server/ 根：这里的 `data/` 是 **SQLite 库目录**（trip.db / trip.db-wal），
+#    必须忽略。之前写成不带斜杠的 `data/` 会把任意层级的 data 目录都忽略掉，
+#    包括 `server/src/data/` —— 而节假日快照 `server/src/data/holiday-cn/*.json`
+#    是 **P0-8 上线前提**、必须随代码入库（运行时只读，靠它做 CDN 兜底）。
+#    改动这一行会让快照重新被忽略，请勿改回。
+/data/
 .env
