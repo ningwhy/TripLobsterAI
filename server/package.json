@@ -14,7 +14,9 @@
     "test:dates": "node test/planner_dates.mjs",
     "test:cost": "node test/planner_cost_passthrough.mjs",
     "test:cost-pipeline": "node test/cost_pipeline_consistency.mjs",
-    "test": "node test/planner_open_hours.mjs && node test/planner_dates.mjs && node test/planner_cost_passthrough.mjs && node test/cost_pipeline_consistency.mjs"
+    "test": "node test/planner_open_hours.mjs && node test/planner_dates.mjs && node test/planner_cost_passthrough.mjs && node test/cost_pipeline_consistency.mjs",
+    "holiday:snapshot": "node scripts/holiday-snapshot.mjs",
+    "holiday:verify": "node scripts/holiday-verify-live.mjs"
   },
   "dependencies": {
     "express": "^4.21.2"
