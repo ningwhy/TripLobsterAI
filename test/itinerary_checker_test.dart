@@ -899,7 +899,12 @@ void main() {
       expect(issues.length, 1);
       expect(issues.single.severity, IssueSeverity.neutral);
       expect(issues.single.message, contains('1 个景点'));
-      expect(issues.single.message, contains('营业时间以官方通知为准'));
+      expect(issues.single.message, contains('无原文依据'));
+      expect(issues.single.message, contains('请以官方公告为准'));
+      // 措辞硬约束：不得出现像故障的"未取到/暂无"，也不得说闭馆
+      expect(issues.single.message, isNot(contains('未取到')));
+      expect(issues.single.message, isNot(contains('暂无')));
+      expect(issues.single.message, isNot(contains('闭馆')));
       expect(openHoursHintOf(day([loc(name: '老景点A')]).locations.single).kind,
           OpenHoursHintKind.officialNotice);
       // ③ 不升级为提醒：老行程不得满屏警告
@@ -978,6 +983,168 @@ void main() {
       final ch09 = codes(after, ItineraryIssueCode.ch09OpenHoursUnknown);
       expect(ch09.single.severity, IssueSeverity.neutral);
       expect(after.reminderCount, 0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // T05 集成回归：服务端 `parseOpenTime()` 的四种最终产出形态 → 客户端呈现
+  //
+  // ⚠️ 下面的字段值**不是编的**：每一个都是在最终 HEAD 上用真实
+  //    `planner.js#parseOpenTime(poi, dateISO)` 跑出来的（原文与日期见注释），
+  //    按 `toLocation()` 的键名原样落成 Location。服务端一改判序，这里立刻红。
+  // -------------------------------------------------------------------------
+  group('T05 服务端四种产出形态 → 客户端呈现', () {
+    /// ① 节假日·已给出具体时段
+    /// 原文「全年 周二–周日 09:00–17:00开放 最晚进入16:30；全年 周一 全天不开放；
+    ///      清明节,劳动节,端午节,中秋节,国庆节 09:00–17:00开放 最晚进入16:30」
+    /// 日期 2026-05-02（劳动节·周六）→ reason=ok
+    test('① 节假日+具体时段：正常显示时段并带节日名，不计入 CH-09', () {
+      final poi = loc(
+        name: '良渚博物院',
+        arrivalTime: '10:00',
+        stayMinutes: 120,
+        openTime: '09:00',
+        closeTime: '17:00',
+        lastEntryTime: '16:30',
+        closedOnDate: false,
+        openHoursRaw: '全年 周二–周日 09:00–17:00开放 最晚进入16:30',
+        openSegments: const [OpenSegment(open: '09:00', close: '17:00', lastEntry: '16:30')],
+        holidayName: '劳动节',
+        holidayStatus: HolidayStatus.holiday,
+      );
+
+      expect(openHoursHintOf(poi).kind, OpenHoursHintKind.specific);
+      expect(openHoursHintOf(poi).text, '劳动节 09:00-17:00');
+      final r = checkItineraryDay(day([poi]));
+      expect(r.uncheckedAttractionCount, 0);
+      expect(codes(r, ItineraryIssueCode.ch09OpenHoursUnknown), isEmpty);
+      expect(r.displayIssues, isEmpty);
+    });
+
+    /// ② 节假日·无具体时段（国博型：除外型闭馆失效，且无节假日排班时段）
+    /// 原文「周一闭馆（法定节假日除外）。周二至周日 09:00-17:00」
+    /// 日期 2026-05-04（劳动节·周一）→ reason=holiday_excluded_open
+    test('② 节假日无时段：提醒级 + 以官方公告为准，绝不显示闭馆', () {
+      final poi = loc(
+        name: '中国国家博物馆',
+        arrivalTime: '10:00',
+        stayMinutes: 120,
+        openSegments: const <OpenSegment>[],
+        holidayName: '劳动节',
+        holidayStatus: HolidayStatus.holidayExcludedClose,
+      );
+
+      expect(openHoursHintOf(poi).kind, OpenHoursHintKind.holidayNoHours);
+      expect(openHoursHintOf(poi).text,
+          '逢劳动节，开放时间可能与常规不同，请以官方公告为准');
+
+      final r = checkItineraryDay(day([poi]));
+      final ch09 = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(ch09.single.severity, IssueSeverity.reminder);
+      expect(ch09.single.message, contains('逢劳动节'));
+      expect(ch09.single.message, contains('以官方公告为准'));
+      for (final i in r.displayIssues) {
+        expect(i.message, isNot(contains('闭馆')));
+        expect(i.message, isNot(contains('不开放')));
+      }
+      expect(codes(r, ItineraryIssueCode.ch03ClosedDate), isEmpty);
+      expect(r.blockingCount, 0);
+    });
+
+    /// ③ 非节假日·正常
+    /// 原文同上（良渚），日期 2026-10-13（周二）→ reason=ok, holidayStatus='none'
+    test('③ 非节假日有正常时段：只显示时段，不带节日名，无任何问题', () {
+      final poi = loc(
+        name: '良渚博物院',
+        arrivalTime: '10:00',
+        stayMinutes: 120,
+        openTime: '09:00',
+        closeTime: '17:00',
+        lastEntryTime: '16:30',
+        closedOnDate: false,
+        openHoursRaw: '全年 周二–周日 09:00–17:00开放 最晚进入16:30',
+        openSegments: const [OpenSegment(open: '09:00', close: '17:00', lastEntry: '16:30')],
+        holidayName: null,
+        holidayStatus: HolidayStatus.none,
+      );
+
+      expect(openHoursHintOf(poi).kind, OpenHoursHintKind.specific);
+      expect(openHoursHintOf(poi).text, '09:00-17:00');
+      final r = checkItineraryDay(day([poi]));
+      expect(r.uncheckedAttractionCount, 0);
+      expect(r.displayIssues, isEmpty);
+    });
+
+    /// ④ 诚实未知（P0 修复后新增形态）
+    /// 原文「重大活动期间闭馆（法定节假日除外）」日期 2026-01-05（周一，非节假日）
+    /// → reason=no_matching_clause，五字段全 null、closedOnThisDate=null、
+    ///   openSegments=[]、holidayStatus=null（official_notice /
+    ///   holiday_needs_calendar 落到**完全相同**的字段组合）
+    test('④ 诚实未知：中性披露 + 无原文依据措辞，不显示闭馆也不显示时段', () {
+      final poi = loc(
+        name: '某馆',
+        arrivalTime: '10:00',
+        stayMinutes: 120,
+        openSegments: const <OpenSegment>[],
+      );
+
+      expect(openHoursHintOf(poi).kind, OpenHoursHintKind.officialNotice);
+      expect(openHoursHintOf(poi).text, '该日营业时间无原文依据，请以官方公告为准');
+
+      final r = checkItineraryDay(day([poi]));
+      final ch09 = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(ch09.single.severity, IssueSeverity.neutral);
+      expect(ch09.single.message, contains('无原文依据'));
+      expect(ch09.single.message, contains('请以官方公告为准'));
+      // ⛔ 措辞不得像故障，也不得显示闭馆或任何时刻
+      expect(ch09.single.message, isNot(contains('未取到')));
+      expect(ch09.single.message, isNot(contains('暂无')));
+      expect(ch09.single.message, isNot(contains('闭馆')));
+      expect(ch09.single.message, isNot(contains(':')));
+      expect(codes(r, ItineraryIssueCode.ch03ClosedDate), isEmpty);
+      expect(r.blockingCount, 0);
+      expect(r.reminderCount, 0);
+    });
+
+    /// 【T05 修正】`holiday_excluded_close` **与具体时段可以并存** ——
+    /// `finalHolidayStatus()` 优先返回该态，只要原文同时含「除外型闭馆」与
+    /// 节假日排班时段。实测：原文「周一闭馆（法定节假日除外）；法定节假日 09:00-17:00」
+    /// 日期 2026-05-04 → reason=ok, openTime=09:00, holidayStatus='holiday_excluded_close'。
+    ///
+    /// 修正前：`isOpenHoursVerified` 在该态下一律 false →
+    ///   卡片显示 09:00-17:00、日级却说"未取到营业时间"（自相矛盾），
+    ///   且 CH-01/02 被静默跳过（有数据却不校验 = 假阴性）。
+    test('T05 修正：holiday_excluded_close 与具体时段并存 → 按①呈现且照常校验', () {
+      final poi = loc(
+        name: '某馆',
+        arrivalTime: '16:50', // 晚于 16:00 停止入场
+        stayMinutes: 60,
+        openTime: '09:00',
+        closeTime: '17:00',
+        lastEntryTime: '16:00',
+        closedOnDate: false,
+        openHoursRaw: '法定节假日 09:00-17:00',
+        openSegments: const [OpenSegment(open: '09:00', close: '17:00')],
+        holidayName: '劳动节',
+        holidayStatus: HolidayStatus.holidayExcludedClose,
+      );
+
+      // ① 呈现：有具体时段就按①，不被 holiday_excluded_close 拖去②
+      expect(openHoursHintOf(poi).kind, OpenHoursHintKind.specific);
+      expect(openHoursHintOf(poi).text, '劳动节 09:00-17:00');
+      // 已校验 → 不得再产出"无原文依据/未取到营业时间"这类自相矛盾的日级声明
+      expect(isOpenHoursVerified(poi), isTrue);
+
+      final r = checkItineraryDay(day([poi]));
+      expect(r.uncheckedAttractionCount, 0);
+      expect(codes(r, ItineraryIssueCode.ch09OpenHoursUnknown), isEmpty);
+      // CH-01 必须照常亮起（有数据却不校验 = 假阴性）
+      final ch01 = codes(r, ItineraryIssueCode.ch01LateEntry);
+      expect(ch01.length, 1);
+      expect(ch01.single.message, contains('16:50'));
+      expect(ch01.single.message, contains('16:00'));
+      // 也不得被误判成闭馆
+      expect(codes(r, ItineraryIssueCode.ch03ClosedDate), isEmpty);
     });
   });
 

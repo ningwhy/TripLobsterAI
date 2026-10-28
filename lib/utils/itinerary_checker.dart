@@ -314,12 +314,25 @@ String formatDurationMinutes(int minutes) {
 /// ⛔ `closedOnDate == null`（未知）**一定返回 false**：未知就是未校验，
 ///    这正是三态语义存在的意义（null ≠ false）。
 bool isOpenHoursVerified(Location loc) {
-  // 【T04 红线】除外型闭馆条款**在节假日失效**（`holiday_excluded_close`）：
-  // 服务端那条 `closedOnDate=true` 结论在节假日不可信 → 一律**不算已校验**。
+  // 【T04 红线 / T05 收窄】除外型闭馆条款**在节假日失效**（`holiday_excluded_close`）：
+  // 当服务端在该态下**没有**给出开放结论（`closedOnDate != false`）时，
+  // 那条 `closedOnDate=true` 在节假日不可信 → **不算已校验**。
   //
-  // 不这么做会出现"两头落空"：CH-03 因红线被抑制、又因为"已校验"不进 CH-09，
+  // 不这么做会"两头落空"：CH-03 因红线被抑制、又因为"已校验"不进 CH-09，
   // 用户什么提示都看不到 —— 等于把"不确定"渲染成"没问题"。
-  if (loc.holidayStatus == HolidayStatus.holidayExcludedClose) return false;
+  //
+  // ⚠️ 判据必须带 `closedOnDate != false`（T05 修正）：
+  //    `holiday_excluded_close` **与具体时段可以并存** ——
+  //    `finalHolidayStatus()` 优先返回该态，只要原文同时含「除外型闭馆」与
+  //    「节假日 09:00-17:00」这类排班（实测：src 含两句、日期 2026-05-04 →
+  //    reason=ok, openTime=09:00, holidayStatus='holiday_excluded_close'）。
+  //    此时服务端**确实**给出了可核对时段，若一律判"未校验"就会：
+  //      ① 卡片显示 09:00-17:00、日级却说"未取到营业时间"（自相矛盾）；
+  //      ② CH-01/02 被静默跳过（有数据却不校验 = 假阴性）。
+  if (loc.holidayStatus == HolidayStatus.holidayExcludedClose &&
+      loc.closedOnDate != false) {
+    return false;
+  }
   final raw = loc.openHoursRaw;
   if (raw == null || raw.trim().isEmpty) return false;
   if (loc.closedOnDate == true) return true;
@@ -435,10 +448,15 @@ OpenHoursHint openHoursHintOf(Location loc) {
   }
 
   // ③ 其余（含 `holidayStatus` 为 null / 'none'，以及客户端不可分辨的
-  //    official_notice / holiday_needs_calendar —— reason 不进 payload，见本枚举注释）
+  //    official_notice / holiday_needs_calendar / no_matching_clause ——
+  //    reason 不进 payload，见本枚举注释）
+  //
+  // 措辞口径（T05，QA 提的 UX 风险）：这是"原文**没有依据**给出时段"的诚实返回，
+  // **不是**"数据没抓到" → 不写"暂无/未取到营业时间"这类像故障的措辞，
+  // 也不写任何时刻、不说闭馆。
   return const OpenHoursHint(
     kind: OpenHoursHintKind.officialNotice,
-    text: '营业时间以官方通知为准',
+    text: '该日营业时间无原文依据，请以官方公告为准',
   );
 }
 
@@ -818,7 +836,15 @@ DayCheckResult checkItineraryDay(TripDay day) {
         dayNumber: day.dayNumber,
         // ⛔ 日级问题**不归责到任何卡片**：否则用户会以为某个景点出了事
         locationId: null,
-        message: '当日 $restUnchecked 个景点未取到营业时间，未做打烊/闭馆校验，营业时间以官方通知为准',
+        // 措辞口径（T05）：「无原文依据」而非「未取到营业时间」——
+        // 本档的真实语义是"原文没给出可核对依据"（含 official_notice /
+        // holiday_needs_calendar / 老行程缺字段），不是抓取失败，
+        // 不能让用户以为是我们坏了。
+        //
+        // ⛔ 同时**不**给出任何时刻、**不**出现"闭馆"二字（连"未做闭馆校验"
+        //    这种否定式也不写：用户扫读只会看到"闭馆"两字，等于自己造噪声）。
+        message:
+            '当日 $restUnchecked 个景点：该日营业时间无原文依据，请以官方公告为准（未做营业时间校验）',
       ),
     );
   }
