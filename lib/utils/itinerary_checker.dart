@@ -314,6 +314,12 @@ String formatDurationMinutes(int minutes) {
 /// ⛔ `closedOnDate == null`（未知）**一定返回 false**：未知就是未校验，
 ///    这正是三态语义存在的意义（null ≠ false）。
 bool isOpenHoursVerified(Location loc) {
+  // 【T04 红线】除外型闭馆条款**在节假日失效**（`holiday_excluded_close`）：
+  // 服务端那条 `closedOnDate=true` 结论在节假日不可信 → 一律**不算已校验**。
+  //
+  // 不这么做会出现"两头落空"：CH-03 因红线被抑制、又因为"已校验"不进 CH-09，
+  // 用户什么提示都看不到 —— 等于把"不确定"渲染成"没问题"。
+  if (loc.holidayStatus == HolidayStatus.holidayExcludedClose) return false;
   final raw = loc.openHoursRaw;
   if (raw == null || raw.trim().isEmpty) return false;
   if (loc.closedOnDate == true) return true;
@@ -323,6 +329,124 @@ bool isOpenHoursVerified(Location loc) {
   if (open == null || close == null) return false;
   // 一致性兜底：open < close 才可信（服务端解析时已校验，客户端不信任跨进程数据）
   return open < close;
+}
+
+/// 营业时间提示的三种情形（T04，设计 §0.5）。
+///
+/// 判据来自服务端 `toLocation()` 下发的 `holidayStatus` + 时段字段；
+/// 文案三选一，**不混合**：同一个地点只会命中其中一种。
+enum OpenHoursHintKind {
+  /// ① 已解析出具体时段（含多时段）：正常展示时段；`holidayName` 有值时附在前面。
+  specific,
+
+  /// ② 当天是法定节假日，但**没有**可用时段：
+  ///    除外型闭馆条款在节假日失效（服务端 reason `holiday_excluded_open`），
+  ///    或只有「节假日正常开放」的明示却无时段（`holiday_open_no_hours`）。
+  ///
+  /// ⛔ 本态**禁止**显示「已闭馆 / 不开放」，也**禁止**编造时段。
+  holidayNoHours,
+
+  /// ③ 无可用时段、且客户端拿不到任何"官方通知 / 日历不可得"的专属信号。
+  ///
+  /// 【为什么 ③ 只能是"兜底兜不住"的合并态】
+  /// 服务端 `reason`（`official_notice` / `holiday_needs_calendar` / `no_matching_clause`）
+  /// 是**诊断字段，不进 payload** —— 已核对 `planner.js:1528-1585` 的 `toLocation()`，
+  /// 它逐个显式列出下发的键，其中**没有** `reason`；五类"无时段"原因在客户端
+  /// 落到完全相同的字段组合（时刻全 null、`closedOnDate` null、`openSegments` `[]`）。
+  /// 故 ③ 与「老行程 / 未解析」在客户端**不可区分**，只能合并披露。
+  officialNotice,
+}
+
+/// 某地点营业时间的展示用结论（**派生数据，不落库**）。
+class OpenHoursHint {
+  final OpenHoursHintKind kind;
+
+  /// 展示文案（三选一，调用方直接渲染，不要再二次加工）
+  final String text;
+
+  /// 节日名（① ② 可能有值；③ 恒 null）
+  final String? holidayName;
+
+  const OpenHoursHint({
+    required this.kind,
+    required this.text,
+    this.holidayName,
+  });
+}
+
+/// 可用时段文本：`HH:mm-HH:mm`；多时段用「、」连接；无可用时段 → null。
+///
+/// 取数顺序与既有 UI 一致（`location_card._metaText`）：先看 `openTime/closeTime`
+/// （单时段的既有形态），再看 `openSegments`（多时段时前两者恒 null）。
+/// ⛔ 半个时段（只有 open 没有 close）**不算**可用时段：返回 null 由调用方降级。
+String? openHoursSegmentsText(Location loc) {
+  final open = loc.openTime;
+  final close = loc.closeTime;
+  if (open != null && close != null && open.isNotEmpty && close.isNotEmpty) {
+    return '$open-$close';
+  }
+  final segments = loc.openSegments;
+  if (segments == null || segments.isEmpty) return null;
+  final parts = segments
+      .where((s) => s.open.isNotEmpty && s.close.isNotEmpty)
+      .map((s) => '${s.open}-${s.close}')
+      .toList();
+  if (parts.isEmpty) return null;
+  return parts.join('、');
+}
+
+/// 营业时间提示（T04 三类文案的唯一入口，纯函数）。
+///
+/// | 情形 | 判据 | 文案 |
+/// |---|---|---|
+/// | ① 有具体时段 | `openHoursSegmentsText != null` | `劳动节 09:00-17:00` |
+/// | ② 节假日无时段 | `holidayStatus` 为 `'holiday_excluded_close'` 或 `'holiday'` | `逢劳动节，开放时间可能与常规不同，请以官方公告为准` |
+/// | ③ 其余 | 无时段且无节假日结论 | `营业时间以官方通知为准` |
+///
+/// ⛔ ② 与「闭馆」是互斥的：`holiday_excluded_close` 的含义恰恰是
+///    「除外型闭馆条款**在节假日失效**」，此时说闭馆 = 阻塞级假阳性。
+///    本函数在任何分支都**不产出**"闭馆 / 不开放"字样。
+OpenHoursHint openHoursHintOf(Location loc) {
+  final segments = openHoursSegmentsText(loc);
+  final holidayName = _nonEmpty(loc.holidayName);
+
+  // ① 有具体时段 → 正常展示（节假日只是前缀，不改变时段本身）
+  if (segments != null) {
+    return OpenHoursHint(
+      kind: OpenHoursHintKind.specific,
+      text: holidayName == null ? segments : '$holidayName $segments',
+      holidayName: holidayName,
+    );
+  }
+
+  // ② 逢法定节假日但无时段：'holiday_excluded_close'（除外型失效）或
+  //    'holiday'（有"正常开放"明示却没解析出时段，服务端 reason holiday_open_no_hours）。
+  //    两者都**没有**依据给出时段，也**没有**依据判闭馆。
+  final status = loc.holidayStatus;
+  final isHolidayNoHours =
+      status == HolidayStatus.holidayExcludedClose || status == HolidayStatus.holiday;
+  if (isHolidayNoHours) {
+    final prefix = holidayName == null ? '逢法定节假日' : '逢$holidayName';
+    return OpenHoursHint(
+      kind: OpenHoursHintKind.holidayNoHours,
+      text: '$prefix，开放时间可能与常规不同，请以官方公告为准',
+      holidayName: holidayName,
+    );
+  }
+
+  // ③ 其余（含 `holidayStatus` 为 null / 'none'，以及客户端不可分辨的
+  //    official_notice / holiday_needs_calendar —— reason 不进 payload，见本枚举注释）
+  return const OpenHoursHint(
+    kind: OpenHoursHintKind.officialNotice,
+    text: '营业时间以官方通知为准',
+  );
+}
+
+/// 去空白后的非空串；null / 空串 / 纯空白 → null。
+String? _nonEmpty(String? v) {
+  if (v == null) return null;
+  final t = v.trim();
+  return t.isEmpty ? null : t;
 }
 
 /// 从首站 `arrivalTime` 锚重建当日时刻链（纯函数、不做任何网络/时间读取）。
@@ -392,7 +516,21 @@ DayCheckResult checkItineraryDay(TripDay day) {
 
     // CH-03 闭馆日：必须有原文片段（无证据不展示结构化结论）
     final raw = loc.openHoursRaw;
-    if (loc.closedOnDate == true && raw != null && raw.trim().isNotEmpty) {
+    // 【T04 红线】`holiday_excluded_close` = 「周一闭馆（法定节假日除外）」这类
+    // **除外型闭馆条款在节假日失效**：原文没有"节假日正常开放"的明示，
+    // 服务端既给不出时段，也不该由它得出"闭馆"。此时说闭馆就是**阻塞级假阳性**
+    // （用户会在节假日被错误告知博物馆关门）。
+    //
+    // 宁可少显示，不可显示错：本态一律**不产出** CH-03，改由 CH-09 的 ② 类文案披露。
+    // 注：服务端 `planner.js:674/726` 在该态下仍可能带 `closedOnThisDate=true`
+    // （与"明确关闭文字排除掉的段"叠加时），故客户端必须在此显式拦截，
+    // 不能只靠 `closedOnDate == true` 判断。
+    final closedSuppressed =
+        loc.holidayStatus == HolidayStatus.holidayExcludedClose;
+    if (!closedSuppressed &&
+        loc.closedOnDate == true &&
+        raw != null &&
+        raw.trim().isNotEmpty) {
       issues.add(
         ItineraryIssue(
           code: ItineraryIssueCode.ch03ClosedDate,
@@ -626,14 +764,45 @@ DayCheckResult checkItineraryDay(TripDay day) {
     }
   }
 
-  // ---------------- CH-09：未校验声明（日级）----------------
+  // ---------------- CH-09：营业时间未校验（日级，T04 三类文案）----------------
+  //
+  // 三档判据见 [openHoursHintOf]：①有具体时段（不计入）②节假日无时段 ③其余。
+  // ②③ 都**不归责到卡片**（日级问题），与既有设计一致。
   var unchecked = 0;
+  var holidayNoHours = 0;
+  String? holidayLabel;
   for (final loc in day.locations) {
-    if (loc.type == LocationType.attraction && !isOpenHoursVerified(loc)) {
-      unchecked++;
+    if (loc.type != LocationType.attraction || isOpenHoursVerified(loc)) continue;
+    unchecked++;
+    final hint = openHoursHintOf(loc);
+    if (hint.kind == OpenHoursHintKind.holidayNoHours) {
+      holidayNoHours++;
+      // 多个景点跨不同节日名时只取第一个，避免把两个节日名拼成一句谣言
+      holidayLabel ??= hint.holidayName;
     }
   }
-  if (unchecked > 0) {
+
+  // ② 逢法定节假日但无具体时段 → **提醒**级（不确定，但比"完全没数据"更值得提示），
+  //    绝不升级为阻塞：我们没有依据说它闭馆，也没有依据说它几点开。
+  if (holidayNoHours > 0) {
+    final prefix = holidayLabel == null ? '逢法定节假日' : '逢$holidayLabel';
+    issues.add(
+      ItineraryIssue(
+        code: ItineraryIssueCode.ch09OpenHoursUnknown,
+        severity: IssueSeverity.reminder,
+        dayNumber: day.dayNumber,
+        locationId: null,
+        message: '当日 $holidayNoHours 个景点$prefix，开放时间可能与常规不同，请以官方公告为准',
+      ),
+    );
+  }
+
+  // ③ 其余未校验（含客户端无从分辨的 official_notice / holiday_needs_calendar
+  //    —— reason 不进 payload，见 [OpenHoursHintKind.officialNotice] 注释）
+  //    → 维持**中性**（与既有分级一致）：老行程 / 真实 payload 的每一天都落在这里，
+  //    升级成提醒会让"没拿到营业时间"变成满屏警告，那是另一种假阳性。
+  final restUnchecked = unchecked - holidayNoHours;
+  if (restUnchecked > 0) {
     issues.add(
       ItineraryIssue(
         code: ItineraryIssueCode.ch09OpenHoursUnknown,
@@ -641,7 +810,7 @@ DayCheckResult checkItineraryDay(TripDay day) {
         dayNumber: day.dayNumber,
         // ⛔ 日级问题**不归责到任何卡片**：否则用户会以为某个景点出了事
         locationId: null,
-        message: '当日 $unchecked 个景点未取到营业时间，未做打烊/闭馆校验',
+        message: '当日 $restUnchecked 个景点未取到营业时间，未做打烊/闭馆校验，营业时间以官方通知为准',
       ),
     );
   }

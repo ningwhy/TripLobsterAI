@@ -255,6 +255,12 @@ class _AiPlanPageState extends State<AiPlanPage> {
                 ?.map(OpenSegment.tryFromJson)
                 .whereType<OpenSegment>()
                 .toList(),
+            // ---- T04 补映射：节假日关系（`toLocation()` 下发，纯展示用）----
+            // 与上面同因：漏映射 → 校验器的 ② 类文案整条静默失效
+            //（节假日无时段时会退化成 ③ 的泛泛提示，用户拿不到"以官方公告为准"）。
+            // 缺值一律保持 null —— 不估算、不兜底、不编造节日名。
+            holidayName: loc['holidayName'] as String?,
+            holidayStatus: loc['holidayStatus'] as String?,
           );
         }).toList(),
       );

@@ -468,4 +468,106 @@ void main() {
       expect(loc.openSegments?.single.lastEntry, '16:00');
     });
   });
+
+  // ==========================================================================
+  // T04：节假日关系（holidayName / holidayStatus）
+  //
+  // 两个字段都是**纯展示用的可空字段**：缺键 → null（不兜底、不填默认值）。
+  // ==========================================================================
+  group('Location 节假日字段（T04）', () {
+    test('两个新字段都进 toJson（要云同步，漏一个就丢一条链路）', () {
+      final loc = Location(
+        name: '中国国家博物馆',
+        address: '北京市东城区',
+        type: LocationType.attraction,
+        openTime: '09:00',
+        closeTime: '17:00',
+        closedOnDate: false,
+        openHoursRaw: '09:00-17:00',
+        holidayName: '劳动节',
+        holidayStatus: HolidayStatus.holiday,
+      );
+
+      final json = loc.toJson();
+      expect(json['holidayName'], '劳动节');
+      expect(json['holidayStatus'], 'holiday');
+    });
+
+    test('云同步往返：两个字段一个都不丢', () {
+      final loc = Location(
+        name: '苏州博物馆',
+        address: '苏州市姑苏区',
+        type: LocationType.attraction,
+        holidayName: '国庆节',
+        holidayStatus: HolidayStatus.holidayExcludedClose,
+      );
+      final restored = Location.fromJson(loc.toJson());
+
+      expect(restored.holidayName, '国庆节');
+      expect(restored.holidayStatus, HolidayStatus.holidayExcludedClose);
+    });
+
+    test('旧 JSON 缺两个新键 → 全 null，不抛异常、不兜底', () {
+      // 这是 T02 上线前存量数据的真实形态：期望 null（未知），
+      // **不是** '' / 'none' —— 后者会把"服务端没下发"伪造出结论。
+      final loc = Location.fromJson({
+        'id': 'OLD-2',
+        'name': '老行程景点',
+        'address': '某地',
+        'type': 'attraction',
+        'openTime': '08:00',
+        'closeTime': '18:00',
+      });
+
+      expect(loc.holidayName, isNull);
+      expect(loc.holidayStatus, isNull);
+    });
+
+    test('默认值即 null：不传就是未下发，不给默认值', () {
+      final loc = Location(name: '某馆', address: '某地', type: LocationType.attraction);
+      expect(loc.holidayName, isNull);
+      expect(loc.holidayStatus, isNull);
+      expect(loc.toJson()['holidayName'], isNull);
+      expect(loc.toJson()['holidayStatus'], isNull);
+    });
+
+    test('三种服务端取值都能原样承载（none / holiday / holiday_excluded_close）', () {
+      for (final status in [
+        HolidayStatus.none,
+        HolidayStatus.holiday,
+        HolidayStatus.holidayExcludedClose,
+      ]) {
+        final loc = Location.fromJson({
+          'name': '某馆',
+          'type': 'attraction',
+          'holidayStatus': status,
+          'holidayName': status == HolidayStatus.none ? null : '劳动节',
+        });
+        expect(loc.holidayStatus, status);
+        expect(loc.holidayName, status == HolidayStatus.none ? null : '劳动节');
+        expect(loc.toJson()['holidayStatus'], status);
+      }
+    });
+
+    test('clearOpenHoursFacts 一并清空节假日字段（它们是**按日期**的结论）', () {
+      final loc = Location(
+        name: '故宫',
+        address: '北京',
+        type: LocationType.attraction,
+        openTime: '08:30',
+        closeTime: '17:00',
+        closedOnDate: false,
+        openHoursRaw: '旺季 08:30-17:00',
+        openSegments: const [OpenSegment(open: '08:30', close: '17:00')],
+        holidayName: '劳动节',
+        holidayStatus: HolidayStatus.holiday,
+      );
+
+      loc.clearOpenHoursFacts();
+
+      expect(loc.holidayName, isNull,
+          reason: '把「劳动节」这类别名搬到别的日期 = 编造数据');
+      expect(loc.holidayStatus, isNull);
+    });
+  });
 }

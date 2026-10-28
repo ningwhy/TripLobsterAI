@@ -250,6 +250,29 @@ class OpenSegment {
   }
 }
 
+/// 服务端 `toLocation().holidayStatus` 的取值（设计 §0.5）。
+///
+/// 与 `closedOnDate` 同为**可空语义**：`null` = 服务端未下发（老 payload / 旧数据），
+/// **不等于** `none`（后者是服务端明确算出的「非节假日或无节假日条款」）。
+///
+/// ⛔ 本类只是**常量承载**，不做任何判断；判断一律在 `itinerary_checker.dart`。
+class HolidayStatus {
+  /// 非节假日，或该 POI 无节假日限定条款（绝大多数情况）
+  static const String none = 'none';
+
+  /// 当天是法定节假日，且已据此解析出**具体营业时段**
+  static const String holiday = 'holiday';
+
+  /// 当天是法定节假日，且「周一闭馆（法定节假日除外）」这类**除外型闭馆条款在节假日失效**。
+  ///
+  /// 原文**没有**「节假日正常开放」的明示 → 服务端**没有依据给出具体时段**，
+  /// 更没有依据说它闭馆。客户端在此态下**禁止**展示「已闭馆 / 不开放」——
+  /// 那是阻塞级假阳性（用户会在节假日被错误告知博物馆关门）。
+  static const String holidayExcludedClose = 'holiday_excluded_close';
+
+  const HolidayStatus._();
+}
+
 class Location {
   final String id;
   String name;
@@ -347,6 +370,23 @@ class Location {
   /// null = 旧数据 / 服务端未下发（**与 `[]` 不同**：`[]` 是"明确无时段"）。
   List<OpenSegment>? openSegments;
 
+  // ---- T04 新增：节假日关系（全部**进** toJson/fromJson，要云同步）----
+  //
+  // ⛔ 这两个字段和 T03 那五个一样是**绑定某个具体日期**的结论
+  //    （服务端 `parseOpenTime(poi, dateISO)` 按日解出），
+  //    日期变化 / 跨日移动后必须随 `clearOpenHoursFacts()` 一起清空。
+  /// 当天的法定节假日规范名（如 `'劳动节'` / `'国庆节'` / `'春节'`）。
+  ///
+  /// null = 非节假日，或服务端未给出名称。**纯展示用**：缺了就不显示节日名，
+  /// 绝不拿它反推营业时段，也绝不拿它兜底填充。
+  String? holidayName;
+  /// 当天与法定节假日的关系（三态，取值见 [HolidayStatus]）。
+  ///
+  /// null = 服务端未下发（老 payload / 旧数据），**不等于** `'none'`。
+  /// ⛔ `'holiday_excluded_close'` 表示"除外型闭馆条款在节假日失效"：
+  ///    原文没有"节假日正常开放"的明示，**无依据给时段，也无依据说闭馆**。
+  String? holidayStatus;
+
   Location({
     String? id,
     required this.name,
@@ -377,6 +417,9 @@ class Location {
     this.lastEntryTime,
     this.closedOnDate,
     this.openSegments,
+    // ---- T04 新增：节假日关系（默认 null = 服务端未下发，不填默认值）----
+    this.holidayName,
+    this.holidayStatus,
   }) : id = id ?? const Uuid().v4();
 
   /// 清空「针对某个日期」的营业事实（T04：日期变化 / 跨日移动后调用）。
@@ -390,6 +433,10 @@ class Location {
     closedOnDate = null;
     openHoursRaw = null;
     openSegments = null;
+    // T04：节假日关系同样是**按日期**解析的结论，必须一并清空。
+    // 把「劳动节」这类别名搬到另一个日期 = 编造数据（那天可能根本不是节假日）。
+    holidayName = null;
+    holidayStatus = null;
   }
 
   /// 获取城市名称，优先使用POI返回的city，否则从address解析
@@ -449,6 +496,9 @@ class Location {
     // 客户端命名 `closedOnDate`（服务端别名 `closedOnThisDate` 只在 fromJson 兼容读取）
     'closedOnDate': closedOnDate,
     'openSegments': openSegments?.map((s) => s.toJson()).toList(),
+    // ---- T04 新增：节假日关系（要云同步，故必须进 toJson）----
+    'holidayName': holidayName,
+    'holidayStatus': holidayStatus,
   };
 
   /// 🔒 [address] 声明为非空 `String`，故从 JSON 取值**必须**做 null 兜底。
@@ -499,6 +549,9 @@ class Location {
         ?.map(OpenSegment.tryFromJson)
         .whereType<OpenSegment>()
         .toList(),
+    // ---- T04 新增：向后兼容 —— 旧 JSON 缺这两个键一律 null，不抛、不兜底 ----
+    holidayName: json['holidayName'] as String?,
+    holidayStatus: json['holidayStatus'] as String?,
   );
 }
 

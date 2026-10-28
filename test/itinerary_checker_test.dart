@@ -26,6 +26,9 @@ void main() {
     String? lastEntryTime,
     bool? closedOnDate,
     String? openHoursRaw,
+    List<OpenSegment>? openSegments,
+    String? holidayName,
+    String? holidayStatus,
   }) =>
       Location(
         name: name,
@@ -40,6 +43,9 @@ void main() {
         lastEntryTime: lastEntryTime,
         closedOnDate: closedOnDate,
         openHoursRaw: openHoursRaw,
+        openSegments: openSegments,
+        holidayName: holidayName,
+        holidayStatus: holidayStatus,
       );
 
   TripDay day(List<Location> locations, {int dayNumber = 1}) => TripDay(
@@ -748,6 +754,228 @@ void main() {
       ]));
 
       expect(r.uncheckedAttractionCount, 0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // CH-09 三类文案（T04，设计 §0.5）
+  //
+  // ⛔ 核心红线：`holiday_excluded_close` 是「除外型闭馆条款在节假日**失效**」，
+  //    任何分支都不得把它渲染成"闭馆 / 不开放" —— 那是阻塞级假阳性。
+  // -------------------------------------------------------------------------
+  group('CH-09 三类文案（T04）', () {
+    test('① 节假日 + 已给出具体时段 → 正常展示，节日名作前缀，不计入 CH-09', () {
+      final r = checkItineraryDay(day([
+        loc(
+          name: '国博',
+          arrivalTime: '10:00',
+          stayMinutes: 120,
+          openTime: '09:00',
+          closeTime: '17:00',
+          closedOnDate: false,
+          openHoursRaw: '09:00-17:00',
+          holidayName: '劳动节',
+          holidayStatus: HolidayStatus.holiday,
+        ),
+      ]));
+
+      expect(openHoursHintOf(r.slots.single.location).kind, OpenHoursHintKind.specific);
+      expect(openHoursSegmentsText(r.slots.single.location), '09:00-17:00');
+      expect(openHoursHintOf(r.slots.single.location).text, '劳动节 09:00-17:00');
+      // 已有具体时段 → 已校验 → 不产出 CH-09
+      expect(r.uncheckedAttractionCount, 0);
+      expect(codes(r, ItineraryIssueCode.ch09OpenHoursUnknown), isEmpty);
+      expect(r.displayIssues, isEmpty);
+    });
+
+    test('① 多时段（open/close 全 null）也能给出时段文本，且各段都展示', () {
+      final loc2 = loc(
+        name: '多时段馆',
+        arrivalTime: '19:00',
+        stayMinutes: 60,
+        openSegments: const [
+          OpenSegment(open: '11:00', close: '14:00'),
+          OpenSegment(open: '16:00', close: '22:00'),
+        ],
+        holidayName: '国庆节',
+        holidayStatus: HolidayStatus.holiday,
+      );
+
+      expect(openHoursSegmentsText(loc2), '11:00-14:00、16:00-22:00');
+      expect(openHoursHintOf(loc2).kind, OpenHoursHintKind.specific);
+      expect(openHoursHintOf(loc2).text, '国庆节 11:00-14:00、16:00-22:00');
+    });
+
+    test('② holiday_excluded_close：无时段 → 提醒级 + 以官方公告为准，**绝不**说闭馆', () {
+      final r = checkItineraryDay(day([
+        loc(
+          name: '苏博',
+          arrivalTime: '10:00',
+          stayMinutes: 120,
+          // 服务端 reason=holiday_excluded_open 的字段形态：时刻全 null、segments 为空
+          openSegments: const <OpenSegment>[],
+          holidayName: '劳动节',
+          holidayStatus: HolidayStatus.holidayExcludedClose,
+        ),
+      ]));
+
+      final issues = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(issues.length, 1);
+      expect(issues.single.severity, IssueSeverity.reminder, reason: '不确定 → 提醒级，绝不升级阻塞');
+      expect(issues.single.locationId, isNull);
+      expect(issues.single.message, contains('逢劳动节'));
+      expect(issues.single.message, contains('以官方公告为准'));
+      // ⛔ 红线断言：任何一条文案都不得出现"闭馆 / 不开放 / 已闭馆"
+      for (final i in r.displayIssues) {
+        expect(i.message, isNot(contains('闭馆')));
+        expect(i.message, isNot(contains('不开放')));
+      }
+      expect(codes(r, ItineraryIssueCode.ch03ClosedDate), isEmpty);
+      expect(r.blockingCount, 0);
+      expect(r.uncheckedAttractionCount, 1);
+    });
+
+    test('② 红线：closedOnDate=true 叠加 holiday_excluded_close → CH-03 被拦截', () {
+      // 服务端 planner.js:726 在该态下可能同时给出 closedOnThisDate=true；
+      // 客户端必须显式拦截，否则节假日会被误报"明确闭馆"（阻塞级假阳性）。
+      final r = checkItineraryDay(day([
+        loc(
+          name: '某馆',
+          arrivalTime: '10:00',
+          stayMinutes: 120,
+          closedOnDate: true,
+          openHoursRaw: '周一闭馆（法定节假日除外）',
+          holidayName: '国庆节',
+          holidayStatus: HolidayStatus.holidayExcludedClose,
+        ),
+      ]));
+
+      expect(codes(r, ItineraryIssueCode.ch03ClosedDate), isEmpty,
+          reason: '除外型闭馆在节假日失效 → 不得显示闭馆');
+      expect(r.blockingCount, 0);
+      final ch09 = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(ch09.length, 1);
+      expect(ch09.single.severity, IssueSeverity.reminder);
+      expect(ch09.single.message, contains('逢国庆节'));
+      // 卡片上不得亮任何灯
+      expect(r.primaryIssueByLocation, isEmpty);
+    });
+
+    test('② holiday_open_no_hours（status=holiday 但无时段）→ 同样走 ②，不编造时段', () {
+      final hinted = loc(
+        name: '逢节开放的馆',
+        holidayName: '春节',
+        holidayStatus: HolidayStatus.holiday,
+      );
+      final hint = openHoursHintOf(hinted);
+      expect(hint.kind, OpenHoursHintKind.holidayNoHours);
+      expect(hint.text, contains('逢春节'));
+      expect(hint.text, isNot(contains(':'))); // 没有编造任何时刻
+
+      final r = checkItineraryDay(day([
+        loc(
+          name: '逢节开放的馆',
+          arrivalTime: '10:00',
+          stayMinutes: 120,
+          holidayName: '春节',
+          holidayStatus: HolidayStatus.holiday,
+        ),
+      ]));
+      final ch09 = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(ch09.single.severity, IssueSeverity.reminder);
+      expect(codes(r, ItineraryIssueCode.ch03ClosedDate), isEmpty);
+    });
+
+    test('③ 无节假日结论且无时段 → 中性披露，并提示以官方通知为准', () {
+      // reason 不进 payload：official_notice / holiday_needs_calendar 在客户端
+      // 与"未解析 / 老数据"落到同一字段组合，故合并为同一档中性披露。
+      final r = checkItineraryDay(day([
+        loc(name: '老景点A', arrivalTime: '09:00', stayMinutes: 120),
+      ]));
+
+      final issues = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(issues.length, 1);
+      expect(issues.single.severity, IssueSeverity.neutral);
+      expect(issues.single.message, contains('1 个景点'));
+      expect(issues.single.message, contains('营业时间以官方通知为准'));
+      expect(openHoursHintOf(day([loc(name: '老景点A')]).locations.single).kind,
+          OpenHoursHintKind.officialNotice);
+      // ③ 不升级为提醒：老行程不得满屏警告
+      expect(r.reminderCount, 0);
+      expect(r.blockingCount, 0);
+    });
+
+    test('④ 回归保护：非节假日（status=none）有正常时段 → 文案与级别不变', () {
+      final r = checkItineraryDay(day([
+        loc(
+          name: '上博',
+          arrivalTime: '09:30',
+          stayMinutes: 120,
+          openTime: '09:00',
+          closeTime: '17:00',
+          closedOnDate: false,
+          openHoursRaw: '09:00-17:00',
+          holidayName: null,
+          holidayStatus: HolidayStatus.none,
+        ),
+      ]));
+
+      expect(openHoursHintOf(r.slots.single.location).text, '09:00-17:00');
+      expect(r.uncheckedAttractionCount, 0);
+      expect(r.displayIssues, isEmpty);
+      expect(r.hasAnyIssue, isFalse);
+    });
+
+    test('②③ 同日共存 → 两条 CH-09 分别为提醒/中性，计数口径一致', () {
+      final r = checkItineraryDay(day([
+        loc(
+          name: '节假日馆',
+          arrivalTime: '09:00',
+          stayMinutes: 120,
+          holidayName: '劳动节',
+          holidayStatus: HolidayStatus.holidayExcludedClose,
+        ),
+        loc(name: '老景点', transportMinutes: 20, stayMinutes: 60),
+      ]));
+
+      final issues = codes(r, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(issues.length, 2);
+      expect(issues.map((i) => i.severity).toSet(),
+          {IssueSeverity.reminder, IssueSeverity.neutral});
+      expect(r.uncheckedAttractionCount, 2);
+      expect(r.blockingCount, 0);
+      expect(r.reminderCount, 1);
+      expect(r.displayIssues.length, 2);
+    });
+
+    test('② 无节日名时退化为泛指"逢法定节假日"，不拼造节名', () {
+      final hint = openHoursHintOf(loc(
+        name: '某馆',
+        holidayStatus: HolidayStatus.holidayExcludedClose,
+      ));
+      expect(hint.holidayName, isNull);
+      expect(hint.text, startsWith('逢法定节假日'));
+      expect(hint.text, isNot(contains('null')));
+    });
+
+    test('clearOpenHoursFacts 清掉节假日字段后回落 ③（不得沿用旧日期的节日结论）', () {
+      final poi = loc(
+        name: '某馆',
+        arrivalTime: '10:00',
+        stayMinutes: 120,
+        holidayName: '劳动节',
+        holidayStatus: HolidayStatus.holidayExcludedClose,
+      );
+      expect(checkItineraryDay(day([poi])).reminderCount, 1);
+
+      poi.clearOpenHoursFacts();
+      expect(poi.holidayName, isNull);
+      expect(poi.holidayStatus, isNull);
+
+      final after = checkItineraryDay(day([poi]));
+      final ch09 = codes(after, ItineraryIssueCode.ch09OpenHoursUnknown);
+      expect(ch09.single.severity, IssueSeverity.neutral);
+      expect(after.reminderCount, 0);
     });
   });
 
