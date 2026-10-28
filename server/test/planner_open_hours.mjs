@@ -21,9 +21,16 @@ import {
   normalizePoi,
   toLocation,
 } from '../src/planner.js';
+import { createHolidayResolver, setDefaultHolidayResolver } from '../src/holiday.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURE = path.join(__dirname, 'fixtures', 'open_hours_cases.json');
+
+// 【T03】注入**离线**节假日日历解析器（enableNetwork:false），保证本测试全程零网络。
+// 数据来源：server/src/data/holiday-cn/2026.json 内置快照（已核实含 2026 年 33 天法定节假日）。
+// 不注入时 planner 走 getDefaultHolidayResolver()（enableNetwork 默认 true），
+// 虽然 statusOfSnapshot 本身也不联网，但显式关网可以把「离线」从约定升级为断言。
+setDefaultHolidayResolver(createHolidayResolver({ enableNetwork: false }));
 
 let failed = 0;
 let passed = 0;
@@ -289,24 +296,56 @@ check('G1 多时段 payload：openTime/closeTime 为 null（D12 复述，锁定�
 // G2 风险④：苏州博物馆尾部条款"……可根据需要临时闭馆，届时将告示公众"含"闭馆"
 // 但无星期、无日期 —— 旧逻辑判"每天都闭馆"（阻塞级假阳性）。
 // 修复（planner.js isScheduled）：纯关闭句必须带星期或日期区间才算排期闭馆。
-const SUZHOU = '开放时间:周二至周日9:00-17:00(16:00停止入馆)，周一全天闭馆(法定节假日除外)。' +
+//
+// 【T03 改动】原文由简化文本还原为**高德真实原文**（opentime2 逐字照抄），
+// 因为简化文本丢掉了「春节,劳动节,端午节 09:00–17:00开放」这条具名排班 clause，
+// 使 G2 无法覆盖 T02 最重要的新能力（节假日命中具名排班）。
+const SUZHOU_REAL = '09/25-09/27 10:00–20:00开放 最晚进入19:00；09/30-10/06 10:00–20:00开放 最晚进入19:00；' +
+  '01/01-09/24 周二–周日 09:00–17:00开放 最晚进入16:00；09/28-09/29 周二–周日 09:00–17:00开放 最晚进入16:00；' +
+  '10/07-12/31 周二–周日 09:00–17:00开放 最晚进入16:00；01/01-09/24 周一 全天不开放；09/28-09/29 周一 全天不开放；' +
+  '10/07-12/31 周一 全天不开放；春节,劳动节,端午节 09:00–17:00开放；夜间开放时间另行公布。' +
   '如本馆遇有重大活动或重要设备设施维修保养时，可根据需要临时闭馆，届时将告示公众。';
 for (const d of ['2026-10-13', '2026-10-14', '2026-10-15', '2026-10-16', '2026-10-17']) {
-  const r = parseOpenTime({ biz_ext: { opentime2: SUZHOU } }, d);
+  const r = parseOpenTime({ biz_ext: { opentime2: SUZHOU_REAL } }, d);
   check(`G2 苏州博物馆 ${d}：closedOnThisDate 不得为 true（条件式临时闭馆≠排期闭馆）`,
     r.closedOnThisDate !== true, `closed=${r.closedOnThisDate} reason=${r.reason}`);
+  // 用真实原文时这些日期（周二至周六）应落在「10/07-12/31 周二–周日」段上，解析出 09:00-17:00
+  check(`G2 苏州博物馆 ${d}：真实原文仍解析出 09:00-17:00（lastEntry 16:00）`,
+    r.open === '09:00' && r.close === '17:00' && r.lastEntry === '16:00',
+    `${r.open}-${r.close} le=${r.lastEntry}`);
 }
-const g2Wed = parseOpenTime({ biz_ext: { opentime2: SUZHOU } }, '2026-10-14');
+const g2Wed = parseOpenTime({ biz_ext: { opentime2: SUZHOU_REAL } }, '2026-10-14');
 check('G2 苏州博物馆周三仍正常解析出营业段（不该因尾部条款整体放弃）',
   g2Wed.open === '09:00' && g2Wed.close === '17:00' && g2Wed.closedOnThisDate === false,
   `${g2Wed.open}-${g2Wed.close} closed=${g2Wed.closedOnThisDate}`);
-const g2Mon = parseOpenTime({ biz_ext: { opentime2: SUZHOU } }, '2026-10-12');
-// 注意：该原文的闭馆句自带「(法定节假日除外)」—— 无法在无权威日历时判断 10-12
-// 是否为例外假日，正确行为是**整体放弃返 null**（holiday_exception），
-// 既不谎报闭馆、也不谎报营业，客户端走 CH-09 诚实披露。排期闭馆路径的存活证明见 G3。
-check('G2 苏州博物馆周一：遇「法定节假日除外」限定 → 整体放弃返 null（不猜节假日日历）',
-  g2Mon.closedOnThisDate === null && g2Mon.reason === 'holiday_exception',
-  `closed=${g2Mon.closedOnThisDate} reason=${g2Mon.reason}`);
+
+// G2-① 非节假日周一（2026-10-12 已核实：周一，且国庆 10/01-10/07 已结束 → 非节假日）
+// P0-1 误伤修复：旧逻辑遇「节假日除外 / 具名节假日」就整体放弃返 null。
+// 新逻辑先查权威日历 → 非节假日 → 丢弃全部节假日限定条款、按纯文本解析：
+// 「10/07-12/31 周一 全天不开放」是**带日期区间 + 星期**的排期闭馆 → closed=true。
+// 这是确定结论，不是猜测：原文有明确闭馆证据。
+const g2Mon = parseOpenTime({ biz_ext: { opentime2: SUZHOU_REAL } }, '2026-10-12');
+check('G2① 苏州博物馆非节假日周一（2026-10-12）：closedOnThisDate=true（不再是 null）',
+  g2Mon.closedOnThisDate === true, `closed=${g2Mon.closedOnThisDate} reason=${g2Mon.reason}`);
+check('G2① 苏州博物馆非节假日周一：reason=closed',
+  g2Mon.reason === 'closed', `实际 ${g2Mon.reason}`);
+check('G2① 苏州博物馆非节假日周一：三个时刻为 null 且 segments 为空',
+  g2Mon.open === null && g2Mon.close === null && g2Mon.lastEntry === null &&
+      g2Mon.segments.length === 0, JSON.stringify(g2Mon));
+
+// G2-② 节假日周一（2026-05-04 已核实：劳动节假期且为周一）
+// 常规段「周二–周日」不含周一 → 若无节假日 clause 就只能返 no_matching_clause；
+// 靠具名 clause「春节,劳动节,端午节 09:00–17:00开放」命中 → 给出确定时段。
+const g2HolMon = parseOpenTime({ biz_ext: { opentime2: SUZHOU_REAL } }, '2026-05-04');
+check('G2② 苏州博物馆节假日周一（2026-05-04 劳动节）：open=09:00 close=17:00 lastEntry=16:00',
+  g2HolMon.open === '09:00' && g2HolMon.close === '17:00' && g2HolMon.lastEntry === '16:00',
+  `${g2HolMon.open}-${g2HolMon.close} le=${g2HolMon.lastEntry}`);
+check('G2② 苏州博物馆节假日周一：closedOnThisDate=false 且 reason=ok',
+  g2HolMon.closedOnThisDate === false && g2HolMon.reason === 'ok',
+  `closed=${g2HolMon.closedOnThisDate} reason=${g2HolMon.reason}`);
+check('G2② 苏州博物馆节假日周一：holidayName=劳动节 / holidayStatus=holiday',
+  g2HolMon.holidayName === '劳动节' && g2HolMon.holidayStatus === 'holiday',
+  `${g2HolMon.holidayName} / ${g2HolMon.holidayStatus}`);
 
 // G3 风险③/CH-03 链路：故宫季节 + 星期双条件选段。周一 → 闭馆；旺季周三 → 08:30-17:00 且 lastEntry=16:00。
 const GUGONG = '旺季4月1日至10月31日 周二至周日 08:30-17:00 16:00停止检票，' +
@@ -328,6 +367,147 @@ const g4 = parseOpenTime({ biz_ext: { opentime2: '24小时营业' } }, '2026-10-
 check('G4 24小时营业：open=00:00 close=24:00 closedOnThisDate=false',
   g4.open === '00:00' && g4.close === '24:00' && g4.closedOnThisDate === false,
   `${g4.open}-${g4.close} closed=${g4.closedOnThisDate}`);
+
+// ---------------------------------------------------------------------------
+// H. 节假日当天离线金标（T03 新增）
+//
+// 为什么单独一节：A 节 fixture 覆盖的是**常规日**（含非节假日周一），
+// 而 T02 最有价值的新能力恰恰发生在**节假日当天**——那天常规星期段（"周二至周日"）
+// 通通不适用，只有靠节假日 clause 才能给出结论。这两条路径必须分开锁。
+//
+// 离线保证：本节全部日期的节假日属性由内置快照 server/src/data/holiday-cn/2026.json
+// 裁决（文件顶部已注入 enableNetwork:false 的解析器），全程零网络、零配额。
+//
+// 【诚实口径 —— 宁可少显示，不可显示错】
+// H1–H5 这类「周一闭馆(法定节假日除外)」的馆，在节假日当天该闭馆条款**失效**了，
+// 但原文**没有**"节假日正常开放/节假日 09:00-17:00"的明示 → 没有任何依据给出时段。
+// 因此正确结果是**"开放但无时段"**（closedOnThisDate=false, segments=[]），
+// **绝不是**"闭馆"——把失效的闭馆条款继续当闭馆，会让用户在节假日当天看到
+// "今日闭馆"而白跑一趟，那是阻塞级假阳性。宁可少显示一个时段，不可显示错。
+// ---------------------------------------------------------------------------
+console.log('\n--- H. 节假日当天离线金标（T03 新增）---');
+
+// H1 上海科技馆（高德 opentime2 真实原文）
+const H1_SRC = '周一 全天关闭；周二至周五,周日 09:00-17:00 最晚进入16:00；周六 09:00-20:00 最晚进入19:00；' +
+  '周一闭馆，节假日除外,具体营业状态以当天开放情况为准';
+// H2 中国国家博物馆
+const H2_SRC = '周一全天关闭(法定节假日除外)；11月1日至次年5月31日周二至周日09:00-17:00(16:00停止入馆)；' +
+  '6月1日至10月31日周二至周日09:00-17:30(16:30停止入馆)';
+// H3 南京博物院
+const H3_SRC = '周一 闭馆(法定节假日除外)；周二至周日 09:00-17:00开放(16:00停止入园)';
+// H4 广东省博物馆
+const H4_SRC = '7月-8月 周二-周日 09:00-21:00开放 最晚进入20:00； 1月-6月, 9月-12月 周二-周日 09:00-17:00开放 ' +
+  '最晚进入16:00； 周一 全天不开放(法定节假日除外)';
+// H5 陕西历史博物馆（2026-02-16 落在冬季区间 11/15–3/14）
+const H5_SRC = '4月1日至11月14日 08:30-19:00 (18:00停止检票),11月15日至3月14日周一 全天关闭(法定节假日除外), ' +
+  '周二至周日09:00-17:30 (16:30停止检票)';
+// H7 良渚博物院
+const H7_SRC = '全年 周二–周日 09:00–17:00开放 最晚进入16:30；全年 周一 全天不开放；' +
+  '清明节,劳动节,端午节,中秋节,国庆节 09:00–17:00开放 最晚进入16:30';
+// H8 中山陵
+const H8_SRC = '08:30-17:00(周一闭馆)；法定节假日及孙中山先生诞辰、逝世纪念日正常开放,墓室仅周二至周五开放' +
+  '(数据来源:江苏省文旅厅公共服务平台苏心游)';
+// H9 秦始皇帝陵博物院（多时段：劳动节专属段 + 常规季节段同时命中）
+const H9_SRC = '09/25-09/30 08:00–19:30开放 最晚售票17:30；10/01-10/07 07:30–20:00开放 最晚售票18:00；' +
+  '03/16-09/24 08:30–19:00开放 最晚售票17:00 最晚进入17:00；10/08-11/15 08:30–19:00开放 最晚售票17:00 最晚进入17:00；' +
+  '11/16-12/31 08:30–18:00开放 最晚进入16:30；01/01-03/15 08:30–18:00开放 最晚进入16:30；' +
+  '劳动节 07:30–20:00开放 最晚售票18:00 最晚进入18:00';
+
+// 日期自证（与 fixture 同口径：不许只写日期而硬编码星期 —— 设计共享知识第 20 条）
+// 已核实的 2026 年周一·法定节假日：02-16 / 02-23 / 04-06 / 05-04 / 10-05。
+for (const [iso, wd] of [['2026-05-04', 1], ['2026-10-05', 1], ['2026-02-16', 1], ['2026-10-12', 1]]) {
+  check(`H 日期自证：${iso} 为周${wd}`, weekdayOf(iso) === wd, `实际周${weekdayOf(iso)}`);
+}
+
+/**
+ * 断言「开放但无时段」型（reason=holiday_excluded_open）：
+ * 除外型闭馆条款在节假日失效 → 不许显示成闭馆；但也无依据给时段 → 三个时刻为 null。
+ * @param {string} id 用例号
+ * @param {string} src POI 真实原文
+ * @param {string} date 日期
+ * @param {string} wantName 期望节日名
+ * @returns {void}
+ */
+function assertExcludedOpen(id, src, date, wantName) {
+  const r = parseOpenTime({ biz_ext: { opentime2: src } }, date);
+  check(`${id} reason=holiday_excluded_open`, r.reason === 'holiday_excluded_open', `实际 ${r.reason}`);
+  check(`${id} closedOnThisDate=false（失效的闭馆条款不得再显示成闭馆）`,
+    r.closedOnThisDate === false, `实际 ${r.closedOnThisDate}`);
+  check(`${id} open/close/lastEntry 全 null（无依据给时段，绝不编造）`,
+    r.open === null && r.close === null && r.lastEntry === null,
+    `${r.open}/${r.close}/${r.lastEntry}`);
+  check(`${id} segments 为空数组`, Array.isArray(r.segments) && r.segments.length === 0,
+    JSON.stringify(segPairs(r)));
+  check(`${id} holidayName=${wantName}`, r.holidayName === wantName, `实际 ${r.holidayName}`);
+  check(`${id} holidayStatus=holiday_excluded_close`,
+    r.holidayStatus === 'holiday_excluded_close', `实际 ${r.holidayStatus}`);
+}
+
+/**
+ * 断言「节假日命中具名/泛指排班 → 给出确定单时段」型（reason=ok）。
+ * @param {string} id 用例号
+ * @param {string} src POI 真实原文
+ * @param {string} date 日期
+ * @param {{open: string, close: string, lastEntry: string|null, name: string}} want 期望
+ * @returns {void}
+ */
+function assertOkSegment(id, src, date, want) {
+  const r = parseOpenTime({ biz_ext: { opentime2: src } }, date);
+  check(`${id} open=${want.open} close=${want.close} lastEntry=${JSON.stringify(want.lastEntry)}`,
+    r.open === want.open && r.close === want.close && r.lastEntry === want.lastEntry,
+    `${r.open}-${r.close} le=${r.lastEntry}`);
+  check(`${id} closedOnThisDate=false 且 reason=ok`,
+    r.closedOnThisDate === false && r.reason === 'ok',
+    `closed=${r.closedOnThisDate} reason=${r.reason}`);
+  check(`${id} segments 单段一致`,
+    JSON.stringify(segPairs(r)) === JSON.stringify([[want.open, want.close]]), JSON.stringify(segPairs(r)));
+  check(`${id} holidayName=${want.name} / holidayStatus=holiday`,
+    r.holidayName === want.name && r.holidayStatus === 'holiday',
+    `${r.holidayName} / ${r.holidayStatus}`);
+}
+
+// H1–H5：除外型闭馆在节假日失效 → 开放但无时段（绝不谎报闭馆）
+assertExcludedOpen('H1 上科技馆（2026-05-04 劳动节·周一）', H1_SRC, '2026-05-04', '劳动节');
+assertExcludedOpen('H2 国博（2026-05-04 劳动节·周一）', H2_SRC, '2026-05-04', '劳动节');
+assertExcludedOpen('H3 南博（2026-05-04 劳动节·周一）', H3_SRC, '2026-05-04', '劳动节');
+assertExcludedOpen('H4 粤博（2026-05-04 劳动节·周一）', H4_SRC, '2026-05-04', '劳动节');
+assertExcludedOpen('H5 陕历博（2026-02-16 春节·周一，冬季区间）', H5_SRC, '2026-02-16', '春节');
+
+// H6 苏博：具名 clause「春节,劳动节,端午节 09:00–17:00开放」命中劳动节
+assertOkSegment('H6 苏博（2026-05-04 劳动节·周一）', SUZHOU_REAL, '2026-05-04',
+  { open: '09:00', close: '17:00', lastEntry: '16:00', name: '劳动节' });
+// H7 良渚：具名 clause 命中国庆节（周一常规闭馆，靠节假日 clause 救回）
+assertOkSegment('H7 良渚（2026-10-05 国庆·周一）', H7_SRC, '2026-10-05',
+  { open: '09:00', close: '17:00', lastEntry: '16:30', name: '国庆节' });
+// H8 中山陵：泛指 clause「法定节假日…正常开放」放宽周一闭馆限制
+assertOkSegment('H8 中山陵（2026-05-04 劳动节·周一）', H8_SRC, '2026-05-04',
+  { open: '08:30', close: '17:00', lastEntry: null, name: '劳动节' });
+
+// H9 秦陵：劳动节专属段 + 常规季节段**同时命中** → 诚实输出多时段（不"择优"只留一段）
+const h9 = parseOpenTime({ biz_ext: { opentime2: H9_SRC } }, '2026-05-04');
+check('H9 秦陵（2026-05-04 劳动节·周一）reason=ok_multi_segment',
+  h9.reason === 'ok_multi_segment', `实际 ${h9.reason}`);
+check('H9 秦陵：open/close 为 null（多时段结构性防假阳性）',
+  h9.open === null && h9.close === null, `open=${h9.open} close=${h9.close}`);
+check('H9 秦陵：segments=[07:30-20:00, 08:30-19:00]（劳动节段 + 常规段，不择优）',
+  JSON.stringify(segPairs(h9)) === JSON.stringify([['07:30', '20:00'], ['08:30', '19:00']]),
+  JSON.stringify(segPairs(h9)));
+check('H9 秦陵：closedOnThisDate=false', h9.closedOnThisDate === false, `实际 ${h9.closedOnThisDate}`);
+check('H9 秦陵：holidayName=劳动节 / holidayStatus=holiday',
+  h9.holidayName === '劳动节' && h9.holidayStatus === 'holiday',
+  `${h9.holidayName} / ${h9.holidayStatus}`);
+
+// 对照组：P0-1 修复的**反面**没被破坏 —— H1–H3 在非节假日周一（2026-10-12）
+// 仍必须给出确定闭馆（closed=true, reason=closed, holidayStatus=none）。
+// 若这组挂了，说明修复方向搞反了：把闭馆证据也一并丢弃了。
+for (const [id, src] of [['H1 上科技馆', H1_SRC], ['H2 国博', H2_SRC], ['H3 南博', H3_SRC]]) {
+  const r = parseOpenTime({ biz_ext: { opentime2: src } }, '2026-10-12');
+  check(`对照组 ${id} 非节假日周一（2026-10-12）：closedOnThisDate=true`,
+    r.closedOnThisDate === true, `实际 ${r.closedOnThisDate}`);
+  check(`对照组 ${id} 非节假日周一：reason=closed / holidayStatus=none`,
+    r.reason === 'closed' && r.holidayStatus === 'none',
+    `reason=${r.reason} status=${r.holidayStatus}`);
+}
 
 // ---------------------------------------------------------------------------
 // 汇总

@@ -5,7 +5,9 @@
     "contract": "解析失败 → open/close/lastEntry/closedOnThisDate/openHoursRaw 五字段全 null 且 segments 为空数组；closedOnThisDate 三态（true/false/null），null 绝不当 false。",
     "multiSegmentContract": "单时段 → open/close 有值且 segments 长度 1；多时段 → open/close **强制为 null**，只由 segments 承载。判据是「到达时刻落在 segments 中任一段内」。",
     "weekdayConvention": "1=周一 … 7=周日；expectWeekday 由测试用 Date.UTC 反算并断言，防止 fixture 里写错星期。",
-    "diagnostic": "parseOpenTime 额外返回 reason（服务端诊断/探针统计用），不进入客户端 payload。"
+    "diagnostic": "parseOpenTime 额外返回 reason（服务端诊断/探针统计用），不进入客户端 payload。",
+    "holidayConvention": "T02 起节假日语义由「遇到就整体放弃」升级为「查权威日历后按语义解析」。本 fixture 里所有涉及节假日的用例，其日期的节假日属性均由内置快照 server/src/data/holiday-cn/2026.json 核实（含 33 天法定节假日），并在 note 字段留痕。",
+    "noteField": "note 仅作留痕与解释（测试不读取），说明该用例为什么在新契约下是这个值 —— 防止后人「为了跑绿」把期望值改回旧行为。"
   },
   "cases": [
     {
@@ -154,8 +156,9 @@
     },
     {
       "id": "guobo-monday-holiday-exception",
-      "title": "国博·周一 + 法定节假日除外 → 无权威节假日日历，全 null（不反推、不查表）",
+      "title": "国博·周一（非节假日）→ closed=true：「法定节假日除外」限定先过权威日历，非节假日则丢弃该限定、按纯文本解析出确定闭馆",
       "semantic": "节假日例外",
+      "note": "P0-1 误伤修复（T02 源码 / T03 金标）：旧逻辑一遇「法定节假日除外」就**整体放弃返 null**，在**非节假日**的日子明明能给出确定结论却放弃了 → 属于误伤。新逻辑：先查权威日历，非节假日时丢弃全部节假日限定条款、按纯文本解析 → 该闭馆就 closed=true。本例 2026-06-15 已核实为周一且**非节假日**（端午 6/19-6/21 未到）。",
       "poi": {
         "id": "B000A7ZL90",
         "name": "中国国家博物馆",
@@ -165,9 +168,16 @@
       },
       "date": "2026-06-15",
       "expectWeekday": 1,
-      "expectNull": true,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": true
+      },
       "expectSegments": [],
-      "expectReason": "holiday_exception"
+      "expectReason": "closed",
+      "expectRawIncludes": "周一全天关闭"
     },
     {
       "id": "zhuozheng-endash-peak",
@@ -292,8 +302,9 @@
     },
     {
       "id": "shangbo-monday-exception",
-      "title": "上博·周一闭馆（节假日除外）→ 全 null，不当作开放也不当作确认闭馆",
+      "title": "上博·周一闭馆（节假日除外）→ 非节假日时该限定失效 → closed=true（不再整体放弃）",
       "semantic": "闭馆日 + 节假日例外",
+      "note": "P0-1 误伤修复（T02 源码 / T03 金标）：旧逻辑遇「节假日除外」整体放弃返 null。新逻辑先查权威日历，2026-10-12 已核实为周一且**非节假日**（国庆 10/01-10/07 已结束）→ 丢弃节假日限定条款、按纯文本解析 → closed=true reason=closed。「宁可少显示不可显示错」的反面：这里原文有明确闭馆证据（周一闭馆），给出确定结论不是显示错。",
       "poi": {
         "id": "B00140F0HK",
         "name": "上海博物馆",
@@ -304,9 +315,16 @@
       },
       "date": "2026-10-12",
       "expectWeekday": 1,
-      "expectNull": true,
+      "expectNull": false,
+      "expect": {
+        "open": null,
+        "close": null,
+        "lastEntry": null,
+        "closedOnThisDate": true
+      },
       "expectSegments": [],
-      "expectReason": "holiday_exception"
+      "expectReason": "closed",
+      "expectRawIncludes": "周一闭馆"
     },
     {
       "id": "simple-open-time-only",
@@ -637,8 +655,9 @@
     },
     {
       "id": "notice-required",
-      "title": "营业子句带「以官方通知为准」→ 非确定性语法，放弃",
+      "title": "营业子句带「（节假日另行通知）」→ 非节假日时该限定失效 → 按纯文本给出 09:00-17:00",
       "semantic": "另行通知",
+      "note": "P0-1 误伤修复（T02 源码 / T03 金标）：旧逻辑遇「另行通知」字样就整体放弃返 null。新逻辑：该限定只在**节假日当天**才让原文时段不可信赖；2026-10-13 已核实为周二且**非节假日** → 限定不适用 → 按纯文本解析出确定时段。节假日本身的金标见测试文件 H 节。",
       "poi": {
         "id": "S015",
         "name": "某临时展馆",
@@ -648,9 +667,16 @@
       },
       "date": "2026-10-13",
       "expectWeekday": 2,
-      "expectNull": true,
-      "expectSegments": [],
-      "expectReason": "official_notice"
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": null,
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "09:00-17:00"
     },
     {
       "id": "close-in-parens-monday",
@@ -913,8 +939,9 @@
     },
     {
       "id": "holiday-named-unknown",
-      "title": "良渚同款「清明节,劳动节…09:00–17:00开放」→ 无权威节假日日历，按未知处理返 null",
+      "title": "良渚同款「清明节,劳动节…09:00–17:00开放」→ 非节假日时具名排班条款不适用 → 按常规星期段给出 09:00-17:00（lastEntry 16:30）",
       "semantic": "具名节假日（无法判定）",
+      "note": "P0-1 误伤修复（T02 源码 / T03 金标）：旧逻辑遇具名节假日条款就整体放弃返 null。新逻辑：先查权威日历，2026-10-13 已核实为周二且**非节假日** → 具名排班条款本就不适用（丢弃），按常规星期段解析出确定时段。节假日当天命中具名排班的金标见测试文件 H7。",
       "poi": {
         "id": "B00140M8QK",
         "name": "良渚博物院",
@@ -924,9 +951,16 @@
       },
       "date": "2026-10-13",
       "expectWeekday": 2,
-      "expectNull": true,
-      "expectSegments": [],
-      "expectReason": "holiday_exception"
+      "expectNull": false,
+      "expect": {
+        "open": "09:00",
+        "close": "17:00",
+        "lastEntry": "16:30",
+        "closedOnThisDate": false
+      },
+      "expectSegments": [["09:00", "17:00"]],
+      "expectReason": "ok",
+      "expectRawIncludes": "09:00–17:00"
     }
   ]
 }
