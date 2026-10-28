@@ -522,9 +522,17 @@ DayCheckResult checkItineraryDay(TripDay day) {
     // （用户会在节假日被错误告知博物馆关门）。
     //
     // 宁可少显示，不可显示错：本态一律**不产出** CH-03，改由 CH-09 的 ② 类文案披露。
-    // 注：服务端 `planner.js:674/726` 在该态下仍可能带 `closedOnThisDate=true`
-    // （与"明确关闭文字排除掉的段"叠加时），故客户端必须在此显式拦截，
-    // 不能只靠 `closedOnDate == true` 判断。
+    // ⚠️ 这是**防御性保险，不是在补一个活 bug**（主理人 2026 全年穷举实测：
+    //    9 个真实 POI × 365 天 = 3285 次解析，`holidayStatus='holiday_excluded_close'`
+    //    与 `closedOnThisDate=true` **并置 0 例** —— 当前实现下不可达）。
+    //    不可达的原因只是 `planner.js` `entries.length === 0` 分支的**判序**：
+    //    先 `if (excludedCloseTriggered)` 返回 `closed=false`，只有它为 false 才可能
+    //    走到 `excludedByClose` 那条 `closed=true`，而那时 `finalHolidayStatus()`
+    //    不会返回 `holiday_excluded_close`。
+    //
+    //    判序这么脆、语义又这么微妙：一旦有人调整那个分支的顺序，这个组合会
+    //    **立刻**变成阻塞级假阳性。故客户端显式拦截，**不要按"当前不可达"把它优化掉**。
+    //    同理，[isOpenHoursVerified] 在本态下也必须返回 false（否则两头落空）。
     final closedSuppressed =
         loc.holidayStatus == HolidayStatus.holidayExcludedClose;
     if (!closedSuppressed &&

@@ -836,8 +836,10 @@ void main() {
     });
 
     test('② 红线：closedOnDate=true 叠加 holiday_excluded_close → CH-03 被拦截', () {
-      // 服务端 planner.js:726 在该态下可能同时给出 closedOnThisDate=true；
-      // 客户端必须显式拦截，否则节假日会被误报"明确闭馆"（阻塞级假阳性）。
+      // 防御性保险：主理人 2026 全年穷举实测（9 POI × 365 天 = 3285 次解析）显示
+      // 该组合当前**不可达**（0 例），不可达只因 planner.js `entries.length===0`
+      // 分支的判序。判序一变即成立 → 客户端必须显式拦截，
+      // 否则节假日会被误报"明确闭馆"（阻塞级假阳性）。
       final r = checkItineraryDay(day([
         loc(
           name: '某馆',
