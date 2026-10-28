@@ -100,6 +100,15 @@ const HOLIDAY_NAME_CANON = [
   ['清明', '清明节'], ['劳动节', '劳动节'], ['端午', '端午节'], ['中秋', '中秋节'],
   ['国庆', '国庆节'], ['教师节', '教师节'], ['儿童节', '儿童节'], ['妇女节', '妇女节'],
 ];
+/**
+ * 节假日名令牌正则（源于 HOLIDAY_NAME_CANON 的关键字）：用于判断一个短串是不是**纯节假日名**。
+ * @type {{end: RegExp, start: RegExp}}
+ */
+const HOLIDAY_TOKEN_RE = (() => {
+  const alt = HOLIDAY_NAME_CANON.map(([kw]) => kw).join('|');
+  return { end: new RegExp(`(?:${alt})$`), start: new RegExp(`^\\s*(?:${alt})`) };
+})();
+
 function extractHolidayNames(text) {
   const out = [];
   for (const [kw, canon] of HOLIDAY_NAME_CANON) {
@@ -197,6 +206,11 @@ function splitOpenHoursClauses(original) {
       // 实测原文：「1月至3月,11月至12月 周一至周日 06:30-19:00」（颐和园）。
       // 若在此切分，"1月至3月" 会丢掉挂在后段的营业时间，造成**本可解析却解析不出**的漏报。
       if (/[月日]$/.test(before) && /^\s*\d{1,2}\s*[月日]/.test(after)) continue;
+      // 具名节假日并集：逗号两侧都是节假日名令牌 → 不切。
+      // 实测原文：「春节,劳动节,端午节 09:00–17:00开放」（苏州博物馆）。
+      // 若在此切分，会把"春节" / "劳动节" 切成无时段的裸条款、时段只剩在末段上，
+      // 使 openHoursRaw 只剩「端午节 09:00–17:00开放」——对用户是**残缺原文**。
+      if (HOLIDAY_TOKEN_RE.end.test(before) && HOLIDAY_TOKEN_RE.start.test(after)) continue;
     }
     spans.push([start, i]);
     start = i + 1;
@@ -605,9 +619,19 @@ export function parseOpenTime(poi, dateISO = null, ctx = {}) {
     const sem = c.info.holidaySemantics;
     if (sem === 'none') return 'plain';
     if (!isHoliday) {
-      // 设计 §1.3：non_holiday / no_gate → **丢弃全部 gated 条款**，按现有纯文本逻辑解析。
-      // 即节假日语义条款一律当 plain 处理：其营业段照常适用，闭馆段照常产出 closed=true
-      // （P0-1 收益所在：秦陵 / 苏博 / 良渚 非节假日日期恢复确定结论，不再整体放弃）。
+      // 设计 §1.3：non_holiday → 丢弃"节假日限定"语义，按纯文本解析。但**不能一刀切当 plain**，
+      // 三类条款在平日的时段归属完全不同（T03 实测出的 P0「显示错」）：
+      //   · excluded_close（「周一闭馆(法定节假日除外)」）：限定只管节假日；平日它就是一条普通闭馆句
+      //     → plain（保留 P0-1 收益：非节假日周一给出 closed=true，不再整体返 null）
+      //   · notice（「周二至周日 09:00-17:00（节假日另行通知）」）："另行通知"只覆盖节假日，
+      //     平日时段仍然有效 → plain（否则平日会被误判成无时段，是新的误伤）
+      //   · holiday_open（「劳动节 07:30-20:00开放」）：该时段是**节假日专属**，
+      //     平日套用就是"显示错" → suppress
+      //     例外：若该 clause 自带星期限定（如「周二至周日 09:00-17:00 法定节假日正常开放」），
+      //     说明时段由星期管辖、节假日字样只是"顺带延长"，平日仍应生效 → plain
+      if (sem === 'holiday_open' && c.info.windows.length > 0 && c.info.weekdays === null) {
+        return 'suppress';
+      }
       return 'plain';
     }
     if (sem === 'excluded_close') return 'excluded_lifted';
