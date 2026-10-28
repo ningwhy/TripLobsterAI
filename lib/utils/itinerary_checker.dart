@@ -327,7 +327,8 @@ bool isOpenHoursVerified(Location loc) {
   //    「节假日 09:00-17:00」这类排班（实测：src 含两句、日期 2026-05-04 →
   //    reason=ok, openTime=09:00, holidayStatus='holiday_excluded_close'）。
   //    此时服务端**确实**给出了可核对时段，若一律判"未校验"就会：
-  //      ① 卡片显示 09:00-17:00、日级却说"未取到营业时间"（自相矛盾）；
+  //      ① 卡片显示 09:00-17:00、日级却说"未取到营业时间"（旧措辞，T05 已废弃；
+  //         现措辞为"该日营业时间无原文依据…"，自相矛盾的问题是同一类）；
   //      ② CH-01/02 被静默跳过（有数据却不校验 = 假阴性）。
   if (loc.holidayStatus == HolidayStatus.holidayExcludedClose &&
       loc.closedOnDate != false) {
@@ -414,7 +415,7 @@ String? openHoursSegmentsText(Location loc) {
 /// |---|---|---|
 /// | ① 有具体时段 | `openHoursSegmentsText != null` | `劳动节 09:00-17:00` |
 /// | ② 节假日无时段 | `holidayStatus` 为 `'holiday_excluded_close'` 或 `'holiday'` | `逢劳动节，开放时间可能与常规不同，请以官方公告为准` |
-/// | ③ 其余 | 无时段且无节假日结论 | `营业时间以官方通知为准` |
+/// | ③ 其余 | 无时段且无节假日结论 | `该日营业时间无原文依据，请以官方公告为准` |
 ///
 /// ⛔ ② 与「闭馆」是互斥的：`holiday_excluded_close` 的含义恰恰是
 ///    「除外型闭馆条款**在节假日失效**」，此时说闭馆 = 阻塞级假阳性。
@@ -452,7 +453,8 @@ OpenHoursHint openHoursHintOf(Location loc) {
   //    reason 不进 payload，见本枚举注释）
   //
   // 措辞口径（T05，QA 提的 UX 风险）：这是"原文**没有依据**给出时段"的诚实返回，
-  // **不是**"数据没抓到" → 不写"暂无/未取到营业时间"这类像故障的措辞，
+  // **不是**"数据没抓到" → 不写"暂无/未取到营业时间"这类像故障的措辞
+  // （这两句是**旧措辞、T05 已废弃**，此处只作反面示例，勿照抄回代码），
   // 也不写任何时刻、不说闭馆。
   return const OpenHoursHint(
     kind: OpenHoursHintKind.officialNotice,
@@ -836,7 +838,7 @@ DayCheckResult checkItineraryDay(TripDay day) {
         dayNumber: day.dayNumber,
         // ⛔ 日级问题**不归责到任何卡片**：否则用户会以为某个景点出了事
         locationId: null,
-        // 措辞口径（T05）：「无原文依据」而非「未取到营业时间」——
+        // 措辞口径（T05）：「无原文依据」而非「未取到营业时间」（旧措辞，已废弃）——
         // 本档的真实语义是"原文没给出可核对依据"（含 official_notice /
         // holiday_needs_calendar / 老行程缺字段），不是抓取失败，
         // 不能让用户以为是我们坏了。
