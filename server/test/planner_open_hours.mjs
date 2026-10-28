@@ -510,6 +510,108 @@ for (const [id, src] of [['H1 上科技馆', H1_SRC], ['H2 国博', H2_SRC], ['H
 }
 
 // ---------------------------------------------------------------------------
+// K. 非节假日不得泄漏节假日专属时段（T03 回归锁）
+//
+// 【这个坑的来历】T02 的 P0-1 修复（"遇节假日条款不再整体放弃"）把 clauseMode 的
+// !isHoliday 分支统一返回 'plain'，导致**带营业段的节假日 clause 在平日也被当常规段**：
+// 秦始皇帝陵博物院在非节假日 2026-10-13 输出 segments=[07:30-20:00(劳动节专属), 08:30-19:00]，
+// 用户会在普通10月周二被告诉"07:30 开门"，早到 60 分钟吃闭门羹 —— 这是"显示错"，
+// 方向与 P0-1 正好相反。修复（264e083）把该分支按语义三分，只抑制 holiday_open 型。
+//
+// 【本节为什么成对锁】只锁"平日不泄漏"是不够的：后人看到 K1 很可能"一劳永逸"地把
+// holiday_open 全抑制 → 节假日当天就没时段了（K2 防的就是这个）；
+// 或者把抑制条件放宽到"带节假日字样就抑制" → 把"时段由星期管辖、节假日字样只是顺带
+// 延长"的常规条款一起抑制掉，造成大面积 under-show（K3 防的就是这个）。
+// K1/K2/K3 三条一起才锁住那个精确的例外条件（holiday_open && 有营业段 && 无星期限定）。
+//
+// 【K4/K5 锁的是抑制的代价】抑制节假日条款后，原本靠它支撑的时段会消失。
+// 代价必须落在"少显示"一侧：真实良渚含「周一全天不开放」→ 平日周一仍是 closed=true（K5）；
+// 而简写版良渚没有闭馆句 → 平日周一只能退回"未知"（K4），这才是"宁可少显示不可显示错"。
+// ---------------------------------------------------------------------------
+console.log('\n--- K. 非节假日不得泄漏节假日专属时段（T03 回归锁）---');
+
+// 简写版良渚（与 fixture 用例 holiday-named-unknown 同源，但**不含**「周一全天不开放」）
+const K4_SRC = '全年 周二–周日 09:00–17:00开放 最晚进入16:30；' +
+  '清明节,劳动节,端午节 09:00–17:00开放 最晚进入16:30';
+// 泛指 + 自带星期限定：时段由「周二至周日」管辖，"法定节假日"字样只是顺带延长
+const K3_SRC = '周二至周日 09:00-17:00 法定节假日正常开放';
+
+// 日期自证（项目惯例：不许只写日期而硬编码星期）
+for (const [iso, wd] of [['2026-10-13', 2], ['2026-05-12', 2], ['2026-03-20', 5],
+  ['2026-05-04', 1], ['2026-10-14', 3], ['2026-01-05', 1], ['2026-01-06', 2]]) {
+  check(`K 日期自证：${iso} 为周${wd}`, weekdayOf(iso) === wd, `实际周${weekdayOf(iso)}`);
+}
+
+// K1 核心锁：秦陵在非节假日只给常规季节段，**劳动节专属段 07:30-20:00 绝不出现在平日**
+for (const d of ['2026-10-13', '2026-05-12', '2026-03-20']) {
+  const r = parseOpenTime({ biz_ext: { opentime2: H9_SRC } }, d);
+  check(`K1 秦陵非节假日 ${d}：open=08:30 close=19:00 lastEntry=17:00`,
+    r.open === '08:30' && r.close === '19:00' && r.lastEntry === '17:00',
+    `${r.open}-${r.close} le=${r.lastEntry}`);
+  check(`K1 秦陵非节假日 ${d}：closedOnThisDate=false reason=ok holidayStatus=none`,
+    r.closedOnThisDate === false && r.reason === 'ok' && r.holidayStatus === 'none',
+    `closed=${r.closedOnThisDate} reason=${r.reason} hs=${r.holidayStatus}`);
+  check(`K1 秦陵非节假日 ${d}：segments 只有常规季节段 [08:30-19:00]`,
+    JSON.stringify(segPairs(r)) === JSON.stringify([['08:30', '19:00']]), JSON.stringify(segPairs(r)));
+  // ↓ 本次 P0 的直接锁：**显式点名**被泄漏的那个时段，后人一眼看懂在防什么
+  check(`K1 秦陵非节假日 ${d}：segments 中不得出现劳动节专属段 [07:30-20:00]`,
+    !segPairs(r).some(([o, c]) => o === '07:30' && c === '20:00'), JSON.stringify(segPairs(r)));
+}
+
+// K2 防过度抑制①：节假日当天劳动节段必须还在（只锁 K1 的话，最省事的"修法"就是全抑制）
+const k2 = parseOpenTime({ biz_ext: { opentime2: H9_SRC } }, '2026-05-04');
+check('K2 秦陵节假日当天（2026-05-04 劳动节）：reason=ok_multi_segment',
+  k2.reason === 'ok_multi_segment', `实际 ${k2.reason}`);
+check('K2 秦陵节假日当天：open/close 为 null（多时段结构性防假阳性）',
+  k2.open === null && k2.close === null, `open=${k2.open} close=${k2.close}`);
+check('K2 秦陵节假日当天：segments=[07:30-20:00, 08:30-19:00]（劳动节段未被抑制掉）',
+  JSON.stringify(segPairs(k2)) === JSON.stringify([['07:30', '20:00'], ['08:30', '19:00']]),
+  JSON.stringify(segPairs(k2)));
+check('K2 秦陵节假日当天：closedOnThisDate=false', k2.closedOnThisDate === false,
+  `实际 ${k2.closedOnThisDate}`);
+check('K2 秦陵节假日当天：holidayName=劳动节 / holidayStatus=holiday',
+  k2.holidayName === '劳动节' && k2.holidayStatus === 'holiday',
+  `${k2.holidayName} / ${k2.holidayStatus}`);
+
+// K3 防过度抑制②：自带星期限定的常规条款（"周二至周日 09:00-17:00 法定节假日正常开放"）
+// 时段由星期管辖、节假日字样只是顺带延长 → 平日必须保留 09:00-17:00。
+// 这是 clauseMode 里「weekdays === null 才抑制」的例外分支；删掉这个例外会大面积 under-show。
+for (const d of ['2026-10-13', '2026-10-14']) {
+  const r = parseOpenTime({ biz_ext: { opentime2: K3_SRC } }, d);
+  check(`K3 泛指+星期限定 ${d}：open=09:00 close=17:00`,
+    r.open === '09:00' && r.close === '17:00', `${r.open}-${r.close}`);
+  check(`K3 泛指+星期限定 ${d}：reason=ok holidayStatus=none`,
+    r.reason === 'ok' && r.holidayStatus === 'none', `reason=${r.reason} hs=${r.holidayStatus}`);
+  check(`K3 泛指+星期限定 ${d}：segments=[09:00-17:00]（平日时段未被抑制）`,
+    JSON.stringify(segPairs(r)) === JSON.stringify([['09:00', '17:00']]), JSON.stringify(segPairs(r)));
+}
+
+// K4 抑制的代价落在"少显示"一侧：简写版良渚无闭馆句，非节假日周一唯一能支撑
+// "09:00 开门"的证据就是那条节假日专属条款 → 抑制后只能退回"未知"（no_matching_clause），
+// 这才是"宁可少显示不可显示错"。同文周二有常规星期段 → 正常给出 09:00-17:00。
+const k4Mon = parseOpenTime({ biz_ext: { opentime2: K4_SRC } }, '2026-01-05');
+assertAllNull('K4 简写良渚非节假日周一（2026-01-05）', k4Mon);
+check('K4 简写良渚非节假日周一：reason=no_matching_clause',
+  k4Mon.reason === 'no_matching_clause', `实际 ${k4Mon.reason}`);
+const k4Tue = parseOpenTime({ biz_ext: { opentime2: K4_SRC } }, '2026-01-06');
+check('K4 简写良渚非节假日周二（2026-01-06）：open=09:00 close=17:00 lastEntry=16:30',
+  k4Tue.open === '09:00' && k4Tue.close === '17:00' && k4Tue.lastEntry === '16:30',
+  `${k4Tue.open}-${k4Tue.close} le=${k4Tue.lastEntry}`);
+check('K4 简写良渚非节假日周二：reason=ok', k4Tue.reason === 'ok', `实际 ${k4Tue.reason}`);
+check('K4 简写良渚非节假日周二：segments=[09:00-17:00]',
+  JSON.stringify(segPairs(k4Tue)) === JSON.stringify([['09:00', '17:00']]),
+  JSON.stringify(segPairs(k4Tue)));
+
+// K5 证明 P0-1 的收益没被这次修复回退：真实良渚含「周一全天不开放」，
+// 非节假日周一仍给出确定闭馆（closed=true），而不是退回 null。
+const k5Mon = parseOpenTime({ biz_ext: { opentime2: H7_SRC } }, '2026-01-05');
+check('K5 真实良渚非节假日周一（2026-01-05）：closedOnThisDate=true',
+  k5Mon.closedOnThisDate === true, `实际 ${k5Mon.closedOnThisDate}`);
+check('K5 真实良渚非节假日周一：reason=closed', k5Mon.reason === 'closed', `实际 ${k5Mon.reason}`);
+check('K5 真实良渚非节假日周一：segments 为空数组',
+  Array.isArray(k5Mon.segments) && k5Mon.segments.length === 0, JSON.stringify(segPairs(k5Mon)));
+
+// ---------------------------------------------------------------------------
 // 汇总
 // ---------------------------------------------------------------------------
 console.log('\n--- 语义类覆盖汇总（成功解析 / 保守放弃返 null）---');
