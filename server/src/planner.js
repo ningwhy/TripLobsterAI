@@ -3,6 +3,7 @@
 // 默认走规则引擎：候选收集 → 评分排名 → 地理聚类分天 → NN+2-opt 排序 → 时刻表构建（含用餐、营业时间校验）
 import { amapCall } from './amapProxy.js';
 import { isLlmEnabled, llmChat } from './llm.js';
+import { getDefaultHolidayResolver } from './holiday.js';
 
 const INTERESTS = {
   nature: { label: '自然风光', queries: [{ types: '110200' }, { keywords: '自然风光', types: '110000' }] },
@@ -61,7 +62,10 @@ const ALL_DAY_RE = /24\s*小时|全天开放|全天营业|通宵/;
 const ALL_DAY_SEGMENT = Object.freeze({ open: '00:00', close: '24:00', lastEntry: null });
 /** 节假日例外：需要外部权威节假日日历才能判定 → 放弃（设计 A-3）。 */
 const HOLIDAY_RE = /法定节假日|法定节日|节假日|节日/;
-const HOLIDAY_EXCEPT_RE = /除外|正常开放|照常开放|正常营业/;
+// 【T02/R-1】宽松「除外」识别：节假日字样后 0~6 个非分隔符内出现 除外 / 除…外 / 外。
+// 旧正则（/除外|正常开放|照常开放|正常营业/）漏掉「节假日除外」的宽松写法（上科技馆），
+// 且把「正常开放」也当除外 —— 后者是 C 具名排班（节假日开放），不是除外。
+const HOLIDAY_EXCEPT_RE = /(?:法定)?节(?:假)?日[^，；、]{0,6}(?:除外|除\s*外|外)/;
 /** 另行通知类：属于非确定性语法 → 放弃。 */
 const NOTICE_RE = /以官方通知为准|另行通知|以公告为准|以景区公告为准|以官方公告为准|以现场公告为准/;
 /** 营业时间段 HH:mm-HH:mm（分隔符在归一后统一为 - / 至 / ~）。 */
@@ -86,6 +90,25 @@ const SLASH_MD_RANGE_RE = /(\d{1,2})[-/](\d{1,2})\s*(?:至|到|-|~)\s*(\d{1,2})[
 const HOLIDAY_NAME_RE = /春节|除夕|元宵|元旦|清明|劳动节|端午|中秋|国庆|教师节|儿童节|妇女节/;
 
 /**
+ * 具名节假日 → 法定节假日日历规范名映射（与 holiday-cn 的 `name` 字段对齐）。
+ * 规范名集合：元旦 / 春节 / 清明节 / 劳动节 / 端午节 / 中秋节 / 国庆节 / 教师节 / 儿童节 / 妇女节 / 元宵节。
+ * @param {string} text 子句（已归一）
+ * @returns {string[]} 去重后的规范名；空数组 = 泛指（如「法定节假日」「节假日」）
+ */
+const HOLIDAY_NAME_CANON = [
+  ['元旦', '元旦'], ['春节', '春节'], ['除夕', '春节'], ['元宵', '元宵节'],
+  ['清明', '清明节'], ['劳动节', '劳动节'], ['端午', '端午节'], ['中秋', '中秋节'],
+  ['国庆', '国庆节'], ['教师节', '教师节'], ['儿童节', '儿童节'], ['妇女节', '妇女节'],
+];
+function extractHolidayNames(text) {
+  const out = [];
+  for (const [kw, canon] of HOLIDAY_NAME_CANON) {
+    if (text.includes(kw)) out.push(canon);
+  }
+  return [...new Set(out)];
+}
+
+/**
  * 解析失败的统一空对象（契约：五字段全 null **且 segments 为空数组**）。
  * `reason` 仅用于服务端诊断与探针统计，**不进入客户端 payload**。
  * @param {string} reason 失败原因枚举
@@ -93,7 +116,13 @@ const HOLIDAY_NAME_RE = /春节|除夕|元宵|元旦|清明|劳动节|端午|中
  *            openHoursRaw: null, segments: Array, reason: string}}
  */
 export function emptyOpenHours(reason) {
-  return { open: null, close: null, lastEntry: null, closedOnThisDate: null, openHoursRaw: null, segments: [], reason };
+  return { open: null, close: null, lastEntry: null, closedOnThisDate: null, openHoursRaw: null, segments: [], reason, holidayName: null, holidayStatus: null };
+}
+
+// 【T02】默认日历查询：同步快照优先（parser 纯函数路径，绝不联网）。
+// 仅在 POI 含节假日语义条款时由 parseOpenTime 调用；其余 POI 完全不碰日历。
+function defaultHolidayOf(dateISO) {
+  return getDefaultHolidayResolver().statusOfSnapshot(dateISO);
 }
 
 /** 两位补零时刻：7:30 → 07:30。 */
@@ -411,6 +440,25 @@ function analyzeOpenHoursClause(text) {
   // 关闭词不在括号内、且本句带营业段时（如 "09:00-17:00 周一闭馆"），
   // 星期令牌属于**关闭规则**而非营业星期 → 营业星期视为不限（否则会把周一之外全部误判为不开放）
   const weekdays = close && !closePart && windows.length >= 1 ? null : parseWeekdaySet(body);
+  // 【T02】节假日语义归一：把"节假日"从「放弃信号」升级为「日历闸门信号」（设计 §1.3 / §1.4 / §3.1）。
+  // 旧实现只有 holidayExcept / holidayNamed 两个布尔，且遇节假日条款就整条放弃；
+  // 现归一成四态语义，交由统一闸门按 calendar 裁决。
+  const namedHolidayMatches = extractHolidayNames(text);
+  const hasHolidayWord = HOLIDAY_RE.test(text) || namedHolidayMatches.length > 0;
+  const hasExcept = HOLIDAY_EXCEPT_RE.test(text);
+  let holidaySemantics = 'none';
+  let holidayNames = namedHolidayMatches;
+  let holidayGeneric = false;
+  if (NOTICE_RE.test(text)) {
+    holidaySemantics = 'notice';
+  } else if (hasHolidayWord) {
+    if (hasExcept) {
+      holidaySemantics = 'excluded_close';
+    } else {
+      holidaySemantics = 'holiday_open';
+      holidayGeneric = holidayNames.length === 0; // 无具名 → 泛指（「法定节假日」）
+    }
+  }
   return {
     close,
     closeWeekdays,
@@ -421,8 +469,9 @@ function analyzeOpenHoursClause(text) {
     weekdays,
     windows,
     lastEntries: parseLastEntries(body),
-    holidayExcept: HOLIDAY_RE.test(text) && HOLIDAY_EXCEPT_RE.test(text),
-    holidayNamed: HOLIDAY_NAME_RE.test(text),
+    holidaySemantics,
+    holidayNames,
+    holidayGeneric,
     notice: NOTICE_RE.test(text),
   };
 }
@@ -501,7 +550,7 @@ function hasOpenHoursKey(poi) {
  *            closedOnThisDate: boolean|null, openHoursRaw: string|null,
  *            segments: Array<{open: string, close: string, lastEntry: string|null}>, reason: string}}
  */
-export function parseOpenTime(poi, dateISO = null) {
+export function parseOpenTime(poi, dateISO = null, ctx = {}) {
   const source = openHoursSourceOf(poi);
   if (source === null) return emptyOpenHours(hasOpenHoursKey(poi) ? 'source_not_string' : 'no_source');
   const date = parseIsoDate(dateISO);
@@ -524,11 +573,75 @@ export function parseOpenTime(poi, dateISO = null) {
   const rangeHit = (info) => (info.rangeStatus === 'none' ? true : info.ranges.some(([s, e]) => date.md >= s && date.md <= e));
   const weekdayHit = (info) => info.weekdays === null || info.weekdays.has(date.weekday);
 
+  // ---- 统一闸门（T02）：节假日语义条款 → 必须先过权威日历 ----
+  // 仅当存在「当日适用（rangeHit && weekdayHit）且节假日语义 != none」的条款时才查日历；
+  // 绝大多数 POI 无节假日条款 → 完全不碰日历（零开销、零网络）。
+  const holidayOf = (typeof ctx === 'object' && ctx && typeof ctx.holidayOf === 'function')
+    ? ctx.holidayOf
+    : defaultHolidayOf;
+  const gated = clauses.filter((c) => rangeHit(c.info) && weekdayHit(c.info) && c.info.holidaySemantics !== 'none');
+  let gateStatus = 'no_gate';
+  let hCal = { status: 'non_holiday', name: null };
+  if (gated.length) {
+    try {
+      hCal = holidayOf(dateISO) || { status: 'unknown', name: null };
+    } catch {
+      hCal = { status: 'unknown', name: null };
+    }
+    if (hCal.status === 'unknown') return emptyOpenHours('holiday_needs_calendar');
+    gateStatus = hCal.status; // 'holiday' | 'non_holiday'
+  }
+  const isHoliday = gateStatus === 'holiday';
+  const calName = isHoliday ? (hCal.name || null) : null;
+  let excludedCloseTriggered = false;
+
+  // 每条款在此日期的"解析角色"（设计 §1.3 / §1.4）：
+  //   plain            → 按纯文本逻辑（节假日语义忽略）
+  //   excluded_lifted  → 除外型闭馆在节假日失效：不产 closed=true；其营业段（若有）照常适用
+  //   holiday_open_hit → 具名/泛指排班命中：套用其营业段
+  //   notice_skip      → 官方通知型：不信赖任何时段（无依据）
+  //   suppress         → 具名排班未命中今日 / 非节假日日其条款本就不适用 → 不参与
+  function clauseMode(c) {
+    const sem = c.info.holidaySemantics;
+    if (sem === 'none') return 'plain';
+    if (!isHoliday) {
+      // 设计 §1.3：non_holiday / no_gate → **丢弃全部 gated 条款**，按现有纯文本逻辑解析。
+      // 即节假日语义条款一律当 plain 处理：其营业段照常适用，闭馆段照常产出 closed=true
+      // （P0-1 收益所在：秦陵 / 苏博 / 良渚 非节假日日期恢复确定结论，不再整体放弃）。
+      return 'plain';
+    }
+    if (sem === 'excluded_close') return 'excluded_lifted';
+    if (sem === 'notice') return 'notice_skip';
+    // holiday_open：泛指或名称集合命中今日 → 套用；否则抑制
+    if (c.info.holidayGeneric || c.info.holidayNames.length === 0) return 'holiday_open_hit';
+    if (calName && c.info.holidayNames.includes(calName)) return 'holiday_open_hit';
+    return 'suppress';
+  }
+  // 节假日状态码（设计 §0.5）：② 优先（除外型失效），否则逢节假日记为 'holiday'；无节假日条款则 'none'
+  function finalHolidayStatus() {
+    if (excludedCloseTriggered) return 'holiday_excluded_close';
+    if (isHoliday && gated.length > 0) return 'holiday';
+    return 'none';
+  }
+
+  // 节假日"开放"信号预扫描（设计 §1.4 优先级：C 具名/泛指排班 > 常规条款 > A 失效）：
+  //   holidayOpenApplies    → 当日存在适用的 C 类排班（具名命中或泛指「正常开放」）→
+  //                           抑制无条件闭馆句，并放宽常规营业段的星期限制（覆盖周一闭馆等常规排除）
+  //   excludedCloseTriggered → 当日存在适用的 A 类除外型闭馆（节假日失效）→ 抑制无条件闭馆句
+  //                           （但**不**放宽，因无"正常开放"明示）
+  let holidayOpenApplies = false;
+  let holidayNoticeApplies = false;
+  for (const c of gated) {
+    const m = clauseMode(c);
+    if (m === 'holiday_open_hit') holidayOpenApplies = true;
+    if (m === 'excluded_lifted') excludedCloseTriggered = true;
+    if (m === 'notice_skip') holidayNoticeApplies = true;
+  }
+  const holidaySuppressClose = holidayOpenApplies || excludedCloseTriggered;
+
   // ---- 1. 24 小时 / 全天开放：确定性语义，识别为 00:00-24:00 单段 ----
-  const allDayHits = clauses.filter((c) => c.info.allDay && rangeHit(c.info) && weekdayHit(c.info));
+  const allDayHits = clauses.filter((c) => c.info.allDay && rangeHit(c.info) && weekdayHit(c.info) && clauseMode(c) === 'plain');
   if (allDayHits.length) {
-    if (allDayHits.some((c) => c.info.holidayExcept || c.info.holidayNamed)) return emptyOpenHours('holiday_exception');
-    if (allDayHits.some((c) => c.info.notice)) return emptyOpenHours('official_notice');
     return {
       open: ALL_DAY_SEGMENT.open,
       close: ALL_DAY_SEGMENT.close,
@@ -537,6 +650,8 @@ export function parseOpenTime(poi, dateISO = null) {
       openHoursRaw: allDayHits[0].raw,
       segments: [{ ...ALL_DAY_SEGMENT }],
       reason: 'ok',
+      holidayName: null,
+      holidayStatus: 'none',
     };
   }
 
@@ -548,32 +663,45 @@ export function parseOpenTime(poi, dateISO = null) {
   // 届时将告示公众。" 含"闭馆"但既无星期也无日期 → 若当成排期闭馆，会**每一天都被判闭馆**
   // （阻塞级错误）。这类条件句一律不产出 closedOnThisDate。
   const isScheduled = (info) => info.weekdays !== null || info.rangeStatus === 'ok';
-  const closeHits = clauses.filter((c) => c.info.close && c.info.windows.length === 0 &&
-      isScheduled(c.info) && rangeHit(c.info) && closeWdHit(c.info));
+  const closeHits = clauses.filter((c) => {
+    if (clauseMode(c) !== 'plain') return false; // 节假日语义条款不在此产出 closed=true
+    if (holidaySuppressClose) return false;       // 节假日开放/除外失效信号抑制无条件闭馆句（设计 §1.4）
+    return c.info.close && c.info.windows.length === 0 &&
+        isScheduled(c.info) && rangeHit(c.info) && closeWdHit(c.info);
+  });
   if (closeHits.length) {
-    for (const c of closeHits) {
-      if (c.info.holidayExcept || c.info.holidayNamed) return emptyOpenHours('holiday_exception');
-      if (c.info.notice) return emptyOpenHours('official_notice');
-    }
     // 明确闭馆 = 成功解析：三个时刻为 null，segments 为空，raw 为关闭原文切片
-    return { open: null, close: null, lastEntry: null, closedOnThisDate: true, openHoursRaw: closeHits[0].raw, segments: [], reason: 'closed' };
+    return { open: null, close: null, lastEntry: null, closedOnThisDate: true, openHoursRaw: closeHits[0].raw, segments: [], reason: 'closed', holidayName: calName, holidayStatus: finalHolidayStatus() };
   }
 
   // ---- 3. 收集该日期全部适用营业段（多时段：合并而非放弃）----
+  // 统一闸门已裁决 isHoliday / calName；此处按 clauseMode 逐条款归类（设计 §1.3 / §1.4）：
+  //   plain / holiday_open_hit → 营业段入 entries（holiday_open_hit 套用其时段；plain 按纯文本）
+  //   excluded_lifted         → 除外型闭馆失效：标记失效；其自身为关闭句（无营业段），不产出 closed=true
+  //   suppress / notice_skip  → 不参与（不贡献营业段，也不进 excludedByClose）
   const entries = [];
   const excludedByClose = [];
   for (const c of clauses) {
-    if (!rangeHit(c.info)) continue;
-    if (c.info.windows.length === 0) continue;
-    // 括号里的关闭日属于**这一段**（如"夜场(周一闭园)"）→ 该段在该星期不适用
-    if (c.info.closeWeekdays && c.info.closeWeekdays.has(date.weekday)) {
-      excludedByClose.push(c);
+    const mode = clauseMode(c);
+    if (mode === 'excluded_lifted') {
+      // 除外型闭馆在节假日失效：标记失效；关闭句无营业段，绝不在此产出 closed=true
+      excludedCloseTriggered = true;
       continue;
     }
-    if (!weekdayHit(c.info)) continue; // 星期范围未命中：不反推闭馆，保持未知
-    // 具名节假日（春节/国庆…）是否有别于平日需要权威日历 → 按未知处理（设计 A-3）
-    if (c.info.holidayExcept || c.info.holidayNamed) return emptyOpenHours('holiday_exception');
-    if (c.info.notice) return emptyOpenHours('official_notice');
+    if (mode === 'suppress' || mode === 'notice_skip') continue;
+    if (!rangeHit(c.info)) continue;
+    if (c.info.windows.length === 0) continue;
+    if (c.info.closeWeekdays && c.info.closeWeekdays.has(date.weekday)) {
+      // 括号里的关闭日属于**这一段**（如"夜场(周一闭园)"）→ 该段在该星期不适用
+      if (holidaySuppressClose) {
+        // 节假日开放信号解除关闭日限制：营业段照常适用（不 continue，落到下方入段）；仅不进 excludedByClose
+      } else {
+        excludedByClose.push(c);
+        continue;
+      }
+    }
+    // 星期范围未命中：不反推闭馆，保持未知；但节假日"正常开放"信号可放宽（覆盖周一闭馆等常规排除）
+    if (!weekdayHit(c.info) && !(holidayOpenApplies && mode === 'plain')) continue;
     // 停止入场时刻多于一个时无法归属到具体某一段 → 置 null（丢 lastEntry 不造错误信息）
     const le = c.info.lastEntries.length === 1 ? c.info.lastEntries[0] : null;
     for (const w of c.info.windows) {
@@ -586,12 +714,26 @@ export function parseOpenTime(poi, dateISO = null) {
     }
   }
 
-  // 该日期一段都不适用，但存在被"明确关闭文字"排除掉的段 → 走闭馆语义（有原文证据，不是反推）
+  // 该日期一段都不适用：
   if (entries.length === 0) {
+    // ② 除外型在节假日失效 / 节假日开放信号：原文有"节假日除外 / 正常开放"字样且当日是节假日
+    //   → 无法据原文给出具体时段，故开放但不给时段（closedOnThisDate=false, segments=[]）。
+    if (excludedCloseTriggered) {
+      return { open: null, close: null, lastEntry: null, closedOnThisDate: false, openHoursRaw: null, segments: [], reason: 'holiday_excluded_open', holidayName: calName, holidayStatus: finalHolidayStatus() };
+    }
+    // 存在被"明确关闭文字"排除掉的段 → 走闭馆语义（有原文证据，不是反推）
     if (excludedByClose.length) {
-      if (excludedByClose.some((c) => c.info.holidayExcept || c.info.holidayNamed)) return emptyOpenHours('holiday_exception');
-      if (excludedByClose.some((c) => c.info.notice)) return emptyOpenHours('official_notice');
-      return { open: null, close: null, lastEntry: null, closedOnThisDate: true, openHoursRaw: excludedByClose[0].raw, segments: [], reason: 'closed' };
+      return { open: null, close: null, lastEntry: null, closedOnThisDate: true, openHoursRaw: excludedByClose[0].raw, segments: [], reason: 'closed', holidayName: calName, holidayStatus: finalHolidayStatus() };
+    }
+    // ③ 逢节假日但时段无依据：有"正常开放"明示却无具体时段（C 类排班命中但无营业段）
+    if (holidayOpenApplies) {
+      return { open: null, close: null, lastEntry: null, closedOnThisDate: false, openHoursRaw: null, segments: [], reason: 'holiday_open_no_hours', holidayName: calName, holidayStatus: finalHolidayStatus() };
+    }
+    // ③ 逢节假日且当日唯一匹配条款是"另行通知"型（节假日另行通知）→ 无依据时段，
+    //   诚实返回 official_notice（五字段 null），而非 no_matching_clause（后者语义偏"无任何条款"）。
+    //   设计 §1.3：notice 在节假日一律不信赖任何时段，故不套用其营业段，也不反推闭馆。
+    if (holidayNoticeApplies) {
+      return emptyOpenHours('official_notice');
     }
     return emptyOpenHours('no_matching_clause');
   }
@@ -618,6 +760,8 @@ export function parseOpenTime(poi, dateISO = null) {
       openHoursRaw: raws.join('；'),
       segments,
       reason: 'ok',
+      holidayName: calName,
+      holidayStatus: finalHolidayStatus(),
     };
   }
   // 多时段：open/close 必须为空，且 lastEntry 只在"能明确归属整日"时才给 —— 各段自带 lastEntry
@@ -629,6 +773,8 @@ export function parseOpenTime(poi, dateISO = null) {
     openHoursRaw: raws.join('；'),
     segments,
     reason: 'ok_multi_segment',
+    holidayName: calName,
+    holidayStatus: finalHolidayStatus(),
   };
 }
 
@@ -1406,6 +1552,9 @@ function toLocation(poi, arrival, stay, travel, extra = {}) {
     closeTime: openHours.close ?? null,
     lastEntryTime: openHours.lastEntry ?? null,
     closedOnThisDate: openHours.closedOnThisDate ?? null,
+    // 【T02】节假日关系：可选、向后兼容；老 payload 缺失 → null → 客户端按 ① 降级
+    holidayName: openHours.holidayName ?? null,
+    holidayStatus: openHours.holidayStatus ?? null,
     // 与结论对应的原文命中子句（原样切片），供 UI 副行核对；无证据则不展示结构化结论
     openHoursRaw: openHours.openHoursRaw ?? null,
     // 多时段：单时段时长度 1；多时段时 openTime/closeTime 为 null，只由本字段承载
