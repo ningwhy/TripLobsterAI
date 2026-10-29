@@ -973,13 +973,42 @@ void main() {
   });
 
   group('CH-01…CH-09覆盖度与漏检账本', () {
-    test('11个 ItineraryIssueCode 分支全部由本语料直接覆盖', () {
+    test('CH-01…CH-09 全部规则及分支均进入本语料', () {
+      // 声明式账本：每条样本自带 `codes`，覆盖度由语料本身声明……
       final covered = <ItineraryIssueCode>{
-        for (final sample in corpus)
-          for (final issue in checkItineraryDay(sample.day).issues) issue.code,
+        for (final sample in corpus) ...sample.codes,
       };
 
-      // 账本必须覆盖全部枚举分支：以后新增规则却不补语料会在这里直接红灯。
+      // ……同时逐条跑一遍实际校验，确保声明与实现一致
+      // （`codes` 写错而没人发现 = 账本失真，这里直接红灯）。
+      for (final sample in corpus) {
+        expect(
+          checkItineraryDay(sample.day)
+              .issues
+              .map((issue) => issue.code)
+              .toSet(),
+          sample.codes,
+          reason: '${sample.name}：声明的CH码与实际检出不一致',
+        );
+      }
+
+      // 白名单显式列出全部分支：新增规则却不补语料会在这里直接红灯。
+      expect(
+        covered,
+        containsAll({
+          ItineraryIssueCode.ch01LateEntry,
+          ItineraryIssueCode.ch01ShortVisit,
+          ItineraryIssueCode.ch02EarlyArrival,
+          ItineraryIssueCode.ch03ClosedDate,
+          ItineraryIssueCode.ch04OverMidnight,
+          ItineraryIssueCode.ch05InvalidStay,
+          ItineraryIssueCode.ch05ShortStay,
+          ItineraryIssueCode.ch06InsufficientTransfer,
+          ItineraryIssueCode.ch07TightBuffer,
+          ItineraryIssueCode.ch08LongDay,
+          ItineraryIssueCode.ch09OpenHoursUnknown,
+        }),
+      );
       expect(covered, ItineraryIssueCode.values.toSet());
       expect(covered.length, ItineraryIssueCode.values.length);
     });
