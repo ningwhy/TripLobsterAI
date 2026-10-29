@@ -2,7 +2,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:trip_planner/models/trip_models.dart';
 import 'package:trip_planner/utils/itinerary_checker.dart';
 
-/// P1「质量防线」代表性行程语料：交通衔接、停留时间、冲突。
+/// P1「质量防线」代表性行程语料：营业时间、交通衔接、停留时间、冲突。
 ///
 /// 本文件与函数级单测的区别：每个样本都是一整天的真实城市行程，保留景点、
 /// 餐厅、酒店和逐段交通耗时，再对 [checkItineraryDay] 的全量结果做金标比对。
@@ -10,21 +10,20 @@ import 'package:trip_planner/utils/itinerary_checker.dart';
 /// `transport.durationMinutes`，测试不访问网络，也不消耗高德配额。
 ///
 /// ## 三分类账本
-/// - 规划逻辑错误：北京紧凑转场、杭州宽松转场、西安紧凑冲突，以及北京长日；
+/// - 规划逻辑错误：北京紧凑转场、杭州宽松转场、西安紧凑冲突、北京长日，
+///   以及苏州/北京两家「周一闭馆」的馆被排进行程；
 /// - 数据缺失：杭州丝绸博物馆缺当日营业原文、广州样本同时缺一段交通耗时与
-///   广东省博物馆当日营业原文；
+///   广东省博物馆当日营业原文、北京样本中景山公园缺营业依据；
 /// - 用户偏好修改：上海把上博停留改为 10 分钟、成都把午餐改为 0 分钟、
 ///   北京把晚餐延长到 5 小时。
 ///
 /// ## CH-01…CH-09 覆盖度
-/// - 已覆盖：CH-01（晚于停止入场、距打烊过近）、CH-02、CH-04、
-///   CH-05（过短、非法）、CH-06、CH-07、CH-08、CH-09；
-/// - 未覆盖：CH-03。它属于已完成的「营业时间」专项，不是本轮剩余三项；
-/// - 疑似漏检：无；
-/// - 设计如此的跳过：广州样本在餐厅入段缺交通耗时时，不产出 CH-06/CH-07。
-///   缺关键输入就跳过是校验器的三铁律；同日缺营业原文的景点仍以 CH-09
-///   中性披露，因此不能把该跳过写成交通冲突金标。
+/// 11 个 [ItineraryIssueCode] 分支**全部**由本语料直接覆盖（含 CH-03 当日闭馆），
+/// 覆盖账本断言会校验这一点：新增规则却不补语料会直接红灯。
+/// 唯一按设计跳过的场景是广州样本缺交通耗时时的 CH-06/07 —— 缺关键输入就
+/// 跳过是校验器的三铁律，不能把该跳过写成冲突金标。
 enum _CorpusFocus {
+  openHoursClosure,
   transportConnection,
   stayDuration,
   conflict,
@@ -53,6 +52,7 @@ class _CorpusCase {
   final _CorpusFocus focus;
   final _Density density;
   final TripDay day;
+  final Set<ItineraryIssueCode> codes;
   final List<_ExpectedIssue> expectedIssues;
   final int blockingCount;
   final int reminderCount;
@@ -65,6 +65,7 @@ class _CorpusCase {
     required this.focus,
     required this.density,
     required this.day,
+    required this.codes,
     required this.expectedIssues,
     required this.blockingCount,
     required this.reminderCount,
@@ -88,6 +89,7 @@ Location _location({
   String? lastEntryTime,
   bool? closedOnDate,
   String? openHoursRaw,
+  String? holidayStatus,
 }) {
   return Location(
     name: name,
@@ -110,6 +112,7 @@ Location _location({
     lastEntryTime: lastEntryTime,
     closedOnDate: closedOnDate,
     openHoursRaw: openHoursRaw,
+    holidayStatus: holidayStatus,
   );
 }
 
@@ -120,6 +123,176 @@ TripDay _day(DateTime date, List<Location> locations) => TripDay(
     );
 
 List<_CorpusCase> _buildCorpus() => [
+      _CorpusCase(
+        name: '营业时间·苏州博物馆非节假日周一闭馆（CH-03）',
+        city: '苏州',
+        focus: _CorpusFocus.openHoursClosure,
+        density: _Density.relaxed,
+        day: _day(DateTime(2026, 10, 12), [
+          _location(
+            name: '苏州博物馆',
+            address: '苏州市姑苏区东北街204号',
+            city: '苏州',
+            type: LocationType.attraction,
+            arrivalTime: '09:00',
+            leaveTime: '11:00',
+            stayMinutes: 120,
+            closedOnDate: true,
+            openHoursRaw: '周一 不开放',
+            holidayStatus: HolidayStatus.none,
+          ),
+          _location(
+            name: '松鹤楼观前街店',
+            address: '苏州市姑苏区太监弄72号',
+            city: '苏州',
+            type: LocationType.restaurant,
+            arrivalTime: '11:20',
+            leaveTime: '12:50',
+            stayMinutes: 90,
+            transportMinutes: 20,
+            transportType: TransportType.walk,
+          ),
+          _location(
+            name: '拙政园',
+            address: '苏州市姑苏区东北街178号',
+            city: '苏州',
+            type: LocationType.attraction,
+            arrivalTime: '13:10',
+            leaveTime: '15:40',
+            stayMinutes: 150,
+            transportMinutes: 20,
+            transportType: TransportType.transit,
+            openTime: '07:30',
+            closeTime: '17:30',
+            closedOnDate: false,
+            openHoursRaw: '07:30-17:30',
+          ),
+          _location(
+            name: '平江路历史街区',
+            address: '苏州市姑苏区平江路',
+            city: '苏州',
+            type: LocationType.attraction,
+            arrivalTime: '16:00',
+            leaveTime: '17:40',
+            stayMinutes: 100,
+            transportMinutes: 20,
+            transportType: TransportType.walk,
+            openTime: '00:00',
+            closeTime: '23:30',
+            closedOnDate: false,
+            openHoursRaw: '全天开放',
+          ),
+          _location(
+            name: '苏州观前街希尔顿酒店',
+            address: '苏州市姑苏区观前街附近',
+            city: '苏州',
+            type: LocationType.hotel,
+            arrivalTime: '17:55',
+            leaveTime: '08:00',
+            stayMinutes: 600,
+            transportMinutes: 15,
+            transportType: TransportType.walk,
+          ),
+        ]),
+        codes: const {ItineraryIssueCode.ch03ClosedDate},
+        expectedIssues: const [
+          _ExpectedIssue(
+            ItineraryIssueCode.ch03ClosedDate,
+            IssueSeverity.blocking,
+            '苏州博物馆',
+          ),
+        ],
+        blockingCount: 1,
+        reminderCount: 0,
+        uncheckedAttractionCount: 0,
+        classificationRationale: const {
+          _Classification.planningLogicError:
+              '非节假日周一仍把「周一闭馆」的苏州博物馆排成首站：闭馆结论是已确定的，'
+                  '排进去就是不可执行的安排（P0-1 修复后旧逻辑遇「节假日除外」整体返 null 的误伤已消除）。',
+        },
+      ),
+      _CorpusCase(
+        name: '营业时间·北京国博周一闭馆 + 景山无营业依据（CH-03 + CH-09）',
+        city: '北京',
+        focus: _CorpusFocus.openHoursClosure,
+        density: _Density.compact,
+        day: _day(DateTime(2026, 10, 12), [
+          _location(
+            name: '中国国家博物馆',
+            address: '北京市东城区东长安街16号',
+            city: '北京',
+            type: LocationType.attraction,
+            arrivalTime: '09:00',
+            leaveTime: '11:00',
+            stayMinutes: 120,
+            closedOnDate: true,
+            openHoursRaw: '周一 不开放',
+            holidayStatus: HolidayStatus.none,
+          ),
+          _location(
+            name: '王府井狗不理',
+            address: '北京市东城区王府井大街',
+            city: '北京',
+            type: LocationType.restaurant,
+            arrivalTime: '11:45',
+            leaveTime: '13:00',
+            stayMinutes: 75,
+            transportMinutes: 30,
+            transportType: TransportType.transit,
+          ),
+          _location(
+            name: '景山公园',
+            address: '北京市西城区景山西街44号',
+            city: '北京',
+            type: LocationType.attraction,
+            arrivalTime: '13:20',
+            leaveTime: '14:50',
+            stayMinutes: 90,
+            transportMinutes: 20,
+            transportType: TransportType.transit,
+            // 该景点服务端没给出可核对的营业依据：只能诚实未知。
+            //
+            // ⚠️ 注意与交通规则的联动：本样本 CH-03 之外**不**含 CH-06/CH-07，
+            //    因为营业依据缺失并不影响时刻链（stay 仍已知），这里刻意保持
+            //   「只有闭馆与未知两条」的最小并置口径，便于核对日级/地点级数量。
+          ),
+          _location(
+            name: '北京王府井半岛酒店',
+            address: '北京市东城区金鱼胡同8号',
+            city: '北京',
+            type: LocationType.hotel,
+            arrivalTime: '15:20',
+            leaveTime: '08:00',
+            stayMinutes: 600,
+            transportMinutes: 25,
+            transportType: TransportType.taxi,
+          ),
+        ]),
+        codes: const {
+          ItineraryIssueCode.ch03ClosedDate,
+          ItineraryIssueCode.ch09OpenHoursUnknown,
+        },
+        expectedIssues: const [
+          _ExpectedIssue(
+            ItineraryIssueCode.ch03ClosedDate,
+            IssueSeverity.blocking,
+            '中国国家博物馆',
+          ),
+          _ExpectedIssue(
+            ItineraryIssueCode.ch09OpenHoursUnknown,
+            IssueSeverity.neutral,
+            null,
+          ),
+        ],
+        blockingCount: 1,
+        reminderCount: 0,
+        uncheckedAttractionCount: 1,
+        classificationRationale: const {
+          _Classification.planningLogicError:
+              '国博非节假日周一闭馆却被排成首站：闭馆日进安排是不可执行的排程结论。',
+          _Classification.missingData: '景山公园缺该日营业依据，走CH-09日级中性披露，不能反推它是否开放。',
+        },
+      ),
       _CorpusCase(
         name: '交通衔接·北京中轴紧凑日（CH-06）',
         city: '北京',
@@ -178,6 +351,7 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.taxi,
           ),
         ]),
+        codes: const {ItineraryIssueCode.ch06InsufficientTransfer},
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch06InsufficientTransfer,
@@ -232,6 +406,10 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.taxi,
           ),
         ]),
+        codes: const {
+          ItineraryIssueCode.ch07TightBuffer,
+          ItineraryIssueCode.ch09OpenHoursUnknown,
+        },
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch07TightBuffer,
@@ -311,6 +489,7 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.transit,
           ),
         ]),
+        codes: const {ItineraryIssueCode.ch05ShortStay},
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch05ShortStay,
@@ -368,6 +547,7 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.taxi,
           ),
         ]),
+        codes: const {ItineraryIssueCode.ch05InvalidStay},
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch05InvalidStay,
@@ -457,6 +637,10 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.taxi,
           ),
         ]),
+        codes: const {
+          ItineraryIssueCode.ch01LateEntry,
+          ItineraryIssueCode.ch02EarlyArrival,
+        },
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch02EarlyArrival,
@@ -534,6 +718,11 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.transit,
           ),
         ]),
+        codes: const {
+          ItineraryIssueCode.ch01ShortVisit,
+          ItineraryIssueCode.ch04OverMidnight,
+          ItineraryIssueCode.ch08LongDay,
+        },
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch01ShortVisit,
@@ -614,6 +803,7 @@ List<_CorpusCase> _buildCorpus() => [
             transportType: TransportType.taxi,
           ),
         ]),
+        codes: const {ItineraryIssueCode.ch09OpenHoursUnknown},
         expectedIssues: const [
           _ExpectedIssue(
             ItineraryIssueCode.ch09OpenHoursUnknown,
@@ -658,6 +848,11 @@ void _expectGold(_CorpusCase corpus) {
     ..sort();
 
   expect(actualIssues, expectedIssues, reason: corpus.name);
+  expect(
+    result.issues.map((issue) => issue.code).toSet(),
+    corpus.codes,
+    reason: '${corpus.name}：检出的CH码集合必须与语料设计一致',
+  );
   expect(result.blockingCount, corpus.blockingCount, reason: corpus.name);
   expect(result.reminderCount, corpus.reminderCount, reason: corpus.name);
   expect(
@@ -696,7 +891,20 @@ void main() {
   });
 
   group('语料结构与分类账本', () {
-    test('交通衔接、停留时间、冲突各至少2个城市，并各含紧凑型与宽松型', () {
+    test('营业时间、交通衔接、停留时间、冲突四类均有语料，后三类各至少2个城市', () {
+      // 营业时间类的代表规则是CH-03当日闭馆（评审列的四类之首）。
+      final closureSamples = corpus
+          .where((sample) => sample.focus == _CorpusFocus.openHoursClosure)
+          .toList();
+      expect(closureSamples.length, greaterThanOrEqualTo(2));
+      expect(
+        closureSamples.every(
+          (sample) => sample.codes.contains(ItineraryIssueCode.ch03ClosedDate),
+        ),
+        isTrue,
+        reason: '营业时间类语料必须直接验证CH-03',
+      );
+
       const requiredFocuses = {
         _CorpusFocus.transportConnection,
         _CorpusFocus.stayDuration,
@@ -765,29 +973,72 @@ void main() {
   });
 
   group('CH-01…CH-09覆盖度与漏检账本', () {
-    test('除已由营业时间专项覆盖的CH-03外，其余规则及分支均进入本语料', () {
-      final covered = corpus
-          .expand((sample) => checkItineraryDay(sample.day).issues)
-          .map((issue) => issue.code)
-          .toSet();
+    test('11个 ItineraryIssueCode 分支全部由本语料直接覆盖', () {
+      final covered = <ItineraryIssueCode>{
+        for (final sample in corpus)
+          for (final issue in checkItineraryDay(sample.day).issues) issue.code,
+      };
 
-      expect(
-        covered,
-        containsAll({
-          ItineraryIssueCode.ch01LateEntry,
-          ItineraryIssueCode.ch01ShortVisit,
-          ItineraryIssueCode.ch02EarlyArrival,
-          ItineraryIssueCode.ch04OverMidnight,
-          ItineraryIssueCode.ch05InvalidStay,
-          ItineraryIssueCode.ch05ShortStay,
-          ItineraryIssueCode.ch06InsufficientTransfer,
-          ItineraryIssueCode.ch07TightBuffer,
-          ItineraryIssueCode.ch08LongDay,
-          ItineraryIssueCode.ch09OpenHoursUnknown,
-        }),
+      // 账本必须覆盖全部枚举分支：以后新增规则却不补语料会在这里直接红灯。
+      expect(covered, ItineraryIssueCode.values.toSet());
+      expect(covered.length, ItineraryIssueCode.values.length);
+    });
+
+    test('CH-03：非节假日周一闭馆 = 阻塞且归责到该地点，并钉住P0-1修复后的确定结论', () {
+      final sample = corpus.singleWhere(
+        (item) =>
+            item.focus == _CorpusFocus.openHoursClosure && item.city == '苏州',
       );
-      expect(covered, isNot(contains(ItineraryIssueCode.ch03ClosedDate)));
-      expect(covered.length, ItineraryIssueCode.values.length - 1);
+      final museum = sample.day.locations.first;
+      expect(museum.holidayStatus, HolidayStatus.none, reason: '非节假日周一');
+      expect(museum.closedOnDate, isTrue);
+      expect(museum.openHoursRaw, '周一 不开放');
+
+      final result = checkItineraryDay(sample.day);
+      final ch03 = result.issues
+          .where((issue) => issue.code == ItineraryIssueCode.ch03ClosedDate)
+          .toList();
+      expect(ch03.single.severity, IssueSeverity.blocking);
+      expect(ch03.single.locationId, museum.id);
+      expect(ch03.single.sourceRaw, '周一 不开放', reason: '闭馆结论必须带原文证据');
+      expect(primaryIssueForLocation(result, museum.id)!.code,
+          ItineraryIssueCode.ch03ClosedDate);
+      // 「明确闭馆」是成功解析，不是缺数据 → 不计入CH-09
+      expect(isOpenHoursVerified(museum), isTrue);
+      expect(result.uncheckedAttractionCount, 0);
+    });
+
+    test('CH-03与CH-09并置：地点级与日级各计一条，数量口径不混', () {
+      final sample = corpus.singleWhere(
+        (item) =>
+            item.focus == _CorpusFocus.openHoursClosure && item.city == '北京',
+      );
+      final result = checkItineraryDay(sample.day);
+
+      final ch03 = result.issues
+          .where((issue) => issue.code == ItineraryIssueCode.ch03ClosedDate)
+          .toList();
+      final ch09 = result.issues
+          .where(
+              (issue) => issue.code == ItineraryIssueCode.ch09OpenHoursUnknown)
+          .toList();
+
+      expect(ch03.length, 1);
+      expect(ch03.single.locationId, isNotNull, reason: 'CH-03是地点级');
+      expect(ch09.length, 1);
+      expect(ch09.single.locationId, isNull, reason: 'CH-09是日级，不归责卡片');
+      // 闭馆的馆不计入未校验，未校验只数缺营业依据的景点
+      expect(result.uncheckedAttractionCount, 1);
+      expect(result.blockingCount, 1);
+      // 本样本不含提醒级问题：景山公园缺营业依据不会凭空产出交通/营业提醒
+      expect(result.reminderCount, 0);
+      expect(
+        result.issues.map((issue) => issue.code).toSet(),
+        {
+          ItineraryIssueCode.ch03ClosedDate,
+          ItineraryIssueCode.ch09OpenHoursUnknown,
+        },
+      );
     });
 
     test('数据缺失对照：缺交通耗时后CH-06/CH-07按设计跳过，不固化成冲突', () {
