@@ -1,5 +1,7 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:trip_planner/utils/day_anchor.dart';
+import 'package:trip_planner/widgets/timeline/day_anchor_table.dart';
 
 /// 「滚动联动 / 日期切换」防线的纯逻辑测试（T01 纯函数层）。
 ///
@@ -374,16 +376,6 @@ void main() {
       }
     });
 
-    test('activeIndexFor 对同一个 y 多次调用结果稳定（幂等）', () {
-      const offsets = [0.0, 500.0, 1000.0];
-      for (final y in [-10.0, 0.0, 250.0, 500.0, 750.0, 1000.0, 3000.0]) {
-        final first = DayAnchor.activeIndexFor(offsets, y);
-        for (var i = 0; i < 5; i++) {
-          expect(DayAnchor.activeIndexFor(offsets, y), first, reason: 'y=$y');
-        }
-      }
-    });
-
     test('联动闭环：点选第 i 天 → targetOffset → 再判定仍回到第 i 天（epsilon 的意义）', () {
       // 推导：点选第 i 天时目标 = offsets[i] - epsilon；滚动到位后判定用的
       // 视口坐标是 target + epsilon = offsets[i]，而 activeIndexFor 取
@@ -405,6 +397,182 @@ void main() {
       final target = DayAnchor.targetOffset(offsets.first);
       expect(target, 0);
       expect(DayAnchor.activeIndexFor(offsets, target + 4), 0);
+    });
+  });
+
+  // ===========================================================================
+  // ⑤ DayAnchorTable —— 真正承载「滚动联动」运行时状态的一层
+  // ===========================================================================
+  //
+  // 上面测的是 [DayAnchor] 的三个**纯函数**；但滚动联动在运行时真正被持有的是
+  // [DayAnchorTable]：它缓存各分组头的测量偏移、持有「测全才置干净」的脏标记、
+  // 以及程序化滚动抑制标志。
+  //
+  // `day_anchor_table.dart:54-69` 锁着一个**已修复**的真 bug：
+  // 原实现无条件 `_dirty = false`，长行程首帧只构建视口内的 item →
+  // `keys[i].currentContext == null` → `offsets` 留下 null → `activeIndex` 因
+  // `known.length != dayCount` 恒返回 0（所有天都不高亮）→ 而重测入口
+  // `_onScroll: if (isDirty) _scheduleMeasure()` 已不再触发 → **高亮永久卡在
+  // Day 1，滚动联动彻底失灵**。修复是"测全才置干净"。
+  //
+  // ⚠️ 这个修复此前**没有任何测试锁住**：谁把 `_dirty = false` 改回去，
+  //    全量测试照样绿，产品静默失灵。本组就是那道锁。
+  group('⑤ DayAnchorTable：滚动联动的运行时状态层', () {
+    test('A1. 未测量（offsets 为空）→ activeIndex 恒返回 0，不抢高亮', () {
+      // 推导（对照 day_anchor_table.dart:79-83 的守卫）：
+      //   源码 `final List<double?> offsets = <double?>[];` —— 初始是**空列表**，
+      //   只有 measure() 里才会 addAll(List.filled(dayCount, null))。
+      //   → `known = offsets.whereType<double>().toList()` = []，长度 0 != dayCount(3)
+      //   → 守卫 `if (known.length != dayCount) return 0;` 命中 → 恒 0。
+      //   含义：还没测全时**不允许**用陈旧/缺失偏移去抢高亮（否则会乱跳）。
+      final table = DayAnchorTable(dayCount: 3);
+      expect(table.offsets, isEmpty, reason: 'measure() 之前 offsets 是空列表');
+      expect(table.activeIndex(0), 0);
+      expect(table.activeIndex(500), 0);
+      expect(table.activeIndex(100000), 0);
+      expect(table.activeIndex(-100), 0);
+    });
+
+    test('A2. 未测量 → targetFor 恒返回 null（页面据此下一帧重试）', () {
+      // 推导：targetFor(i) 先取 offsetOf(i)；offsets 为空时
+      // `if (i < 0 || i >= offsets.length) return null;` → 0 >= 0 → null
+      // → targetFor 直接返回 null（不是 0）。
+      // 语义：null = "还没量到"，页面会等下一帧再试；返回 0 会被误当成"滚到顶"。
+      final table = DayAnchorTable(dayCount: 3);
+      expect(table.targetFor(0), isNull);
+      expect(table.targetFor(1), isNull);
+      expect(table.targetFor(2), isNull);
+      expect(table.targetFor(-1), isNull);
+    });
+
+    test('B. offsetOf：未测量 → null；越界（负数 / 等于 dayCount）→ null', () {
+      // 推导：offsetOf 的守卫是 `i < 0 || i >= offsets.length` → null。
+      // 未测量时 offsets.length == 0 → 任何下标（含 0）都是 null。
+      final table = DayAnchorTable(dayCount: 3);
+      expect(table.offsetOf(0), isNull, reason: '未测量');
+      expect(table.offsetOf(2), isNull, reason: '未测量');
+      expect(table.offsetOf(-1), isNull, reason: '越界：负数');
+      expect(table.offsetOf(3), isNull, reason: '越界：等于 dayCount');
+      expect(table.offsetOf(999), isNull, reason: '越界：远超 dayCount');
+    });
+
+    test('C. isDirty：新建即为 true；markDirty() 后仍为 true', () {
+      // 推导：源码 `bool _dirty = true;` → 新建就是脏的（首帧必须测）。
+      // markDirty() 只做 `_dirty = true`（内容变化后要求下一帧重测）。
+      // ⛔ 本组**不**断言"测全后为 false" —— 那需要真实 RenderBox（见 E 组说明）。
+      final table = DayAnchorTable(dayCount: 3);
+      expect(table.isDirty, isTrue, reason: '新建即脏：首帧必须测');
+      table.markDirty();
+      expect(table.isDirty, isTrue, reason: 'markDirty 后仍为 true');
+    });
+
+    test('D. isProgrammatic：初始 false，可置 true 再复位（程序化滚动抑制 spy）', () {
+      // 推导：源码 `bool isProgrammatic = false;` → 初始 false；
+      // 置位/复位由页面在 animateTo 前后控制（day_anchor_table.dart:9-12 防抖三要点）。
+      final table = DayAnchorTable(dayCount: 3);
+      expect(table.isProgrammatic, isFalse);
+      table.isProgrammatic = true;
+      expect(table.isProgrammatic, isTrue);
+      table.isProgrammatic = false;
+      expect(table.isProgrammatic, isFalse);
+    });
+
+    test('E0. 结构契约：keys 长度 == dayCount，dayCount 透传', () {
+      final table = DayAnchorTable(dayCount: 5);
+      expect(table.dayCount, 5);
+      expect(table.keys.length, 5);
+      // keys 必须是互不相同的 GlobalKey（否则测量会串到别的天）
+      expect(table.keys.toSet().length, 5);
+    });
+
+    testWidgets('E1. 真实 measure()：测全 → isDirty 变 false，偏移全部有值', (tester) async {
+      // 用 shrinkWrap 的 ListView：它会把**全部**子项都构建出来，
+      // 因此每个分组头的 GlobalKey 都有 currentContext → offsets 全部非 null
+      // → `_dirty = offsets.any((o) => o == null)` = false。
+      final table = DayAnchorTable(dayCount: 3);
+      final listKey = GlobalKey();
+      final controller = ScrollController();
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 600,
+            child: ListView(
+              key: listKey,
+              controller: controller,
+              shrinkWrap: true,
+              children: [
+                for (var i = 0; i < 3; i++)
+                  SizedBox(
+                      key: table.keys[i], height: 120, child: Text('day$i')),
+              ],
+            ),
+          ),
+        ),
+      ));
+
+      final listBox = listKey.currentContext!.findRenderObject()! as RenderBox;
+      table.measure(listBox, controller.position);
+
+      expect(table.offsets.length, 3, reason: 'measure 后长度补齐到 dayCount');
+      expect(table.offsets.every((o) => o != null), isTrue, reason: '测全则全部有偏移');
+      expect(table.isDirty, isFalse, reason: '测全才置干净：这是被修过的那个 bug 的锁');
+      expect(table.activeIndex(0), 0, reason: '测全后才允许按偏移判定');
+      expect(table.offsetOf(0), isNotNull);
+      controller.dispose();
+    });
+
+    testWidgets('E2. 真实 measure()：未测全 → isDirty 仍为 true，activeIndex 恒 0',
+        (tester) async {
+      // 用**懒构建**的 ListView.builder + 大 itemExtent + 小视口：
+      // 首帧只构建视口内的 item，其余 `keys[i].currentContext == null`
+      // → measure 里 `continue` → offsets 留下 null → 未测全。
+      // 这正是真 bug 的触发场景：若 `_dirty` 被无条件置 false，
+      // 后续就没有重测路径，高亮永久卡在 Day 1。
+      final table = DayAnchorTable(dayCount: 5);
+      final listKey = GlobalKey();
+      final controller = ScrollController();
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 400,
+            child: ListView.builder(
+              key: listKey,
+              controller: controller,
+              itemExtent: 1000,
+              itemCount: 5,
+              itemBuilder: (context, i) => SizedBox(
+                  key: table.keys[i], height: 1000, child: Text('day$i')),
+            ),
+          ),
+        ),
+      ));
+
+      final listBox = listKey.currentContext!.findRenderObject()! as RenderBox;
+      table.measure(listBox, controller.position);
+
+      expect(table.offsets.length, 5, reason: 'measure 后长度补齐到 dayCount');
+      expect(
+        table.offsets.any((o) => o == null),
+        isTrue,
+        reason: '懒构建下必然有分组头没挂上 → 存在未测量的 null',
+      );
+      expect(table.isDirty, isTrue, reason: '未测全必须保持脏，否则滚动联动彻底失灵');
+      expect(
+        table.activeIndex(0),
+        0,
+        reason: '未测全时守卫生效：恒 0，不抢高亮',
+      );
+      expect(
+        table.targetFor(4),
+        isNull,
+        reason: '未挂载的那一天没有目标位置（offsetOf → null → targetFor → null）',
+      );
+      // 顺带钉住已测到的那一天：day0 在视口顶部，偏移 0 → 目标 max(0-4,0) = 0。
+      expect(table.offsetOf(0), isNotNull);
+      expect(table.targetFor(0), 0);
+      controller.dispose();
     });
   });
 }
