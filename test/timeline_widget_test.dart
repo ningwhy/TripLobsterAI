@@ -71,6 +71,16 @@ void main() {
   /// 包一层 MaterialApp：widget 里有 `Text`，裸 `Directionality` 不够稳
   Widget wrap(Widget child) => MaterialApp(home: Scaffold(body: child));
 
+  /// 从卡片子树中提取 meta 文本（多条用 ' · ' 连接的那一条）。
+  /// 操作区文字（如「调整停留」）不含 ' · '，可唯一锁定。
+  String? metaOf(WidgetTester tester) {
+    for (final t in tester.widgetList<Text>(find.byType(Text))) {
+      final d = t.data;
+      if (d != null && d.contains(' · ')) return d;
+    }
+    return null;
+  }
+
   // ==================================================================
   group('DayCostBar 空态口径副行（已修 bug #1）', () {
     testWidgets('空态：显示整日文案 + 口径副行，且不出现 ¥0', (tester) async {
@@ -544,6 +554,228 @@ void main() {
 
       expect(find.textContaining('营业'), findsNothing);
       expect(find.textContaining('null'), findsNothing);
+    });
+  });
+
+  // ==================================================================
+  // P1 质量防线·补强：LocationCard 关键字段渲染 + 异常数据
+  //
+  // 评审 §九 要求时间线组件具备「关键渲染 + 异常数据」测试防线。
+  // 现有本文件的 4 组锁的是**价格层**与**三级提示层**，而信息最密集、
+  // 最易「显示错」的 `_metaText`（城市·地址 / 到达 / 停留 / 营业 / 交通时长 /
+  // 班次票价）此前**零覆盖**。红线：宁可少显示，不可显示错——下列异常用例
+  // 就是锁「缺失不编造、解析失败不吐脏片段、票价缺失不显示 ¥0」。
+  // ==================================================================
+  group('LocationCard 关键字段渲染 + 异常数据（评审 P1 质量防线）', () {
+    Widget card2(Location loc, {int peopleCount = 1, bool showPrice = false}) =>
+        wrap(LocationCard(
+          location: loc,
+          showPrice: showPrice,
+          peopleCount: peopleCount,
+          onTap: () {},
+          onOta: () {},
+          onEditStay: () {},
+          onRemove: () {},
+        ));
+
+    final taxi30 = Transport(
+      type: TransportType.taxi,
+      scope: TransportScope.intraCity,
+      durationMinutes: 30,
+      distance: 5000,
+    );
+
+    testWidgets('关键渲染：meta 含 城市·地址 / 到达 / 停留 / 营业 / 交通',
+        (tester) async {
+      final loc = Location(
+        name: '西湖餐厅',
+        address: '西湖区南山路',
+        type: LocationType.restaurant,
+        city: '杭州',
+        arrivalTime: '09:00',
+        stayMinutes: 120,
+        openTime: '08:00',
+        closeTime: '22:00',
+        transport: taxi30,
+      );
+      await tester.pumpWidget(card2(loc));
+
+      final meta = metaOf(tester);
+      expect(meta, isNotNull);
+      expect(meta, contains('杭州 · 西湖区南山路')); // 多城同名区分（TL-10）
+      expect(meta, contains('09:00'));
+      expect(meta, contains('停留2小时'));
+      expect(meta, contains('营业 08:00-22:00'));
+      expect(meta, contains('打车')); // 交通方式标签（displayName）
+      expect(meta, contains('30分钟')); // 交通时长
+    });
+
+    testWidgets('关键渲染：餐饮人均价 chip 显示「人均 ¥150」', (tester) async {
+      final loc = Location(
+        name: '午餐',
+        address: '',
+        type: LocationType.restaurant,
+        city: '杭州',
+        cost: '150',
+      );
+      await tester.pumpWidget(card2(loc));
+
+      expect(find.textContaining('¥150'), findsOneWidget);
+    });
+
+    testWidgets('异常·缺失交通：transport==null → meta 不出现时长/里程/班次',
+        (tester) async {
+      final loc = Location(
+        name: '无交通点',
+        address: '',
+        type: LocationType.attraction,
+        city: '杭州',
+        arrivalTime: '10:00',
+        // 故意不传 transport
+      );
+      await tester.pumpWidget(card2(loc));
+
+      final meta = metaOf(tester)!;
+      expect(meta, contains('杭州 · 10:00'));
+      expect(meta.contains('分钟'), isFalse); // 不显示伪造的「28分钟」
+      expect(meta.contains('km'), isFalse);
+      expect(meta.contains('→'), isFalse);
+      expect(meta.contains('班次'), isFalse);
+    });
+
+    testWidgets('异常·停留0分钟：stayMinutes==0 → meta 不出现「停留」时长',
+        (tester) async {
+      final loc = Location(
+        name: '瞬时点',
+        address: '',
+        type: LocationType.attraction,
+        city: '杭州',
+        arrivalTime: '10:00',
+        stayMinutes: 0,
+      );
+      await tester.pumpWidget(card2(loc));
+
+      // 只断言 meta 内不含停留时长片段（操作区「调整停留」不在 meta 里）
+      final meta = metaOf(tester)!;
+      expect(meta.contains('停留'), isFalse);
+    });
+
+    testWidgets('异常·营业解析失败：openTime/closeTime 全 null → 不吐脏片段',
+        (tester) async {
+      final loc = Location(
+        name: '无营业点',
+        address: '',
+        type: LocationType.attraction,
+        city: '杭州',
+        arrivalTime: '10:00',
+        // 多时段 / 解析失败 → openTime/closeTime 全 null
+      );
+      await tester.pumpWidget(card2(loc));
+
+      final meta = metaOf(tester)!;
+      expect(meta.contains('营业'), isFalse);
+      expect(meta.contains('null'), isFalse);
+    });
+
+    testWidgets('异常·班次票价缺失：transport.price==null → 不显示 ¥0/暂无票价',
+        (tester) async {
+      final loc = Location(
+        name: '有交通无票价',
+        address: '',
+        type: LocationType.attraction,
+        city: '杭州',
+        transport: Transport(
+          type: TransportType.taxi,
+          scope: TransportScope.intraCity,
+          durationMinutes: 30,
+          // 无 price
+        ),
+      );
+      await tester.pumpWidget(card2(loc, showPrice: false));
+
+      // showPrice=false 且无手填 → 整卡不应出现任何 ¥（票价缺失即留空，不编造）
+      expect(find.textContaining('¥'), findsNothing);
+      final meta = metaOf(tester)!;
+      expect(meta.contains('分钟'), isTrue); // 时长仍正常显示
+      expect(meta.contains('¥'), isFalse);
+    });
+
+    testWidgets('关键·班次票价展示 ¥553×2（按人数，不乘房间）', (tester) async {
+      final loc = Location(
+        name: '高铁站',
+        address: '',
+        type: LocationType.transport,
+        city: '北京',
+        transport: Transport(
+          type: TransportType.highSpeedTrain,
+          scope: TransportScope.intercity,
+          durationMinutes: 20,
+          price: 553,
+        ),
+      );
+      await tester.pumpWidget(card2(loc, peopleCount: 2));
+
+      final meta = metaOf(tester)!;
+      expect(meta.contains('¥553×2'), isTrue);
+    });
+
+    testWidgets('异常·餐饮人均价缺失：cost 为空 → 不留占位 chip', (tester) async {
+      final loc = Location(
+        name: '无价餐饮',
+        address: '',
+        type: LocationType.restaurant,
+        city: '杭州',
+        cost: null,
+      );
+      await tester.pumpWidget(card2(loc, showPrice: false));
+
+      expect(find.textContaining('人均'), findsNothing); // 不留占位（占位=编造）
+      expect(find.textContaining('¥'), findsNothing);
+    });
+
+    testWidgets('关键渲染：交通型地点 里程 chip 显示「5km」', (tester) async {
+      final loc = Location(
+        name: '打车段',
+        address: '',
+        type: LocationType.transport,
+        city: '杭州',
+        transport: Transport(
+          type: TransportType.taxi,
+          scope: TransportScope.intraCity,
+          durationMinutes: 15,
+          distance: 5000,
+        ),
+      );
+      await tester.pumpWidget(card2(loc));
+
+      // 里程只在「地点类型为 transport」时走 chip（chipText 按 loc.type 分支）
+      expect(find.textContaining('5km'), findsOneWidget);
+    });
+  });
+
+  // ==================================================================
+  // P1 质量防线·补强：跨午夜「次日」展示契约（异常数据）
+  //
+  // 内部比较一律用未 mod 1440 的整数分钟，唯一允许表达「次日」的是
+  // [formatClockMinutes]（itinerary_checker.dart:289）。一旦回归成
+  // `% 1440` 再显示，1500 分钟（次日 01:00）会被错显成「01:00」，
+  // 直接违反「宁可少显示不可显示错」。此处锁死契约。
+  // ==================================================================
+  group('formatClockMinutes 跨午夜次日契约', () {
+    test('1500 分钟 → 次日 01:00（不绕回成 01:00）', () {
+      expect(formatClockMinutes(1500), '次日 01:00');
+    });
+    test('1440 分钟 → 次日 00:00', () {
+      expect(formatClockMinutes(1440), '次日 00:00');
+    });
+    test('90 分钟 → 01:30（未跨天不加次日）', () {
+      expect(formatClockMinutes(90), '01:30');
+    });
+    test('1439 分钟 → 23:59', () {
+      expect(formatClockMinutes(1439), '23:59');
+    });
+    test('0 分钟 → 00:00', () {
+      expect(formatClockMinutes(0), '00:00');
     });
   });
 }
