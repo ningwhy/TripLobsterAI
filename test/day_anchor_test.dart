@@ -485,10 +485,23 @@ void main() {
       expect(table.keys.toSet().length, 5);
     });
 
-    testWidgets('E1. 真实 measure()：测全 → isDirty 变 false，偏移全部有值', (tester) async {
-      // 用 shrinkWrap 的 ListView：它会把**全部**子项都构建出来，
-      // 因此每个分组头的 GlobalKey 都有 currentContext → offsets 全部非 null
-      // → `_dirty = offsets.any((o) => o == null)` = false。
+    testWidgets('E1. 构造性验证：内容短于视口 → 全部挂载 → isDirty 变 false',
+        (tester) async {
+      // ⚠️ **代表性边界（探针实测结论，勿删此注释）**：
+      //   本用例的"测全"是靠 **item 总高 120×3 = 360px < 视口 600px**
+      //   （内容比视口矮 → 全部挂载）实现的，**与 shrinkWrap 无关**。
+      //   探针实测：生产同构的 `ListView(children:)` 与 `shrinkWrap:true` 的 ListView，
+      //   在 10 个高 300 的 item / 400px 视口下**都是 7/10 未挂载**。
+      //   → 决定 key 是否挂载的是「内容总高 vs 视口高」，不是 shrinkWrap 属性。
+      //
+      //   且「滚动到底让全部 key 同时挂载」在长列表里**不可达**：
+      //   探针实测 6 个 300px item / 400px 视口，滚动到底后变成 day0-2 回收(NULL)、
+      //   day3-5 挂载 —— 始终只有 3/6 挂载，视口外的会被回收。
+      //
+      //   ⇒ **生产长行程中"全部天同时挂载"不会发生**。本用例的价值在于锁定
+      //      「测全 → `_dirty` 转 false、`offsets` 全非 null、`activeIndex` 允许按偏移判定」
+      //      这条**分支逻辑本身**，不代表生产路径。
+      //      生产路径由 E3「交替挂载 + 逐帧重测」覆盖（那才是长行程的真实形态）。
       final table = DayAnchorTable(dayCount: 3);
       final listKey = GlobalKey();
       final controller = ScrollController();
@@ -500,7 +513,6 @@ void main() {
             child: ListView(
               key: listKey,
               controller: controller,
-              shrinkWrap: true,
               children: [
                 for (var i = 0; i < 3; i++)
                   SizedBox(
@@ -519,6 +531,72 @@ void main() {
       expect(table.isDirty, isFalse, reason: '测全才置干净：这是被修过的那个 bug 的锁');
       expect(table.activeIndex(0), 0, reason: '测全后才允许按偏移判定');
       expect(table.offsetOf(0), isNotNull);
+      controller.dispose();
+    });
+
+    testWidgets('E3. 生产等价：长列表交替挂载 → 重测补全偏移表 → 判定出靠后的天',
+        (tester) async {
+      // 这才是长行程的**真实形态**（探针实测：6 个 300px item / 400px 视口，
+      // 任一时刻都是 3/6 挂载，滚动时前 3 与后 3 交替挂载/回收）：
+      //   首帧   → day0-2 mounted，day3-5 NULL
+      //   滚到底 → day0-2 NULL，day3-5 mounted
+      //
+      // ⛔ **别被 `measure()` 的实现骗了**：`measure()` 遇到 `ctx == null` 只 `continue`，
+      //    **不清空**该槽位已有的旧值 ⇒ `offsets` 是**累积缓存**。
+      //    所以「滚到底再测一次」会把 day3-5 补上，而 day0-2 保留首帧测到的旧值
+      //    ⇒ 六天全部有偏移 ⇒ `isDirty` 转 false、`activeIndex` 开始正常判定。
+      //    这正是 `_dirty` 机制的设计意图：未测全时保持脏、每帧继续测，直到测全。
+      final table = DayAnchorTable(dayCount: 6);
+      final listKey = GlobalKey();
+      final controller = ScrollController();
+
+      await tester.pumpWidget(MaterialApp(
+        home: Scaffold(
+          body: SizedBox(
+            height: 400,
+            child: ListView(
+              key: listKey,
+              controller: controller,
+              children: [
+                for (var i = 0; i < 6; i++)
+                  SizedBox(
+                      key: table.keys[i], height: 300, child: Text('day$i')),
+              ],
+            ),
+          ),
+        ),
+      ));
+      await tester.pump();
+
+      final listBox = listKey.currentContext!.findRenderObject()! as RenderBox;
+
+      // ① 首帧：只有前 3 天挂载 → 未测全 → 必须保持脏（否则没有重测路径，高亮永久卡 Day 1）
+      table.measure(listBox, controller.position);
+      expect(table.isDirty, isTrue,
+          reason: '首帧只挂载前 3 天 → 未测全 → 必须保持脏');
+      expect(table.offsets.whereType<double>().length, 3,
+          reason: '首帧只测到 3 天，另外 3 天留 null');
+
+      // ② 滚到底：后 3 天挂载、前 3 天被回收 → 重测后**累积补全**为 6 天
+      controller.jumpTo(controller.position.maxScrollExtent);
+      await tester.pump();
+      table.measure(listBox, controller.position);
+      expect(table.offsets.whereType<double>().length, 6,
+          reason: '重测补齐后 6 天都测到了（前 3 天沿用首帧旧值，后 3 天新测）');
+      expect(table.isDirty, isFalse,
+          reason: '六天全测到 → 此时才置干净，不再每帧重测');
+
+      // ③ 关键：能判定出**靠后的天**（不是恒 0、也不是恒 Day 1）
+      //
+      // 手算：内容总高 6×300 = 1800，视口 400 ⇒ maxScrollExtent = 1400。
+      // 滚到底时视口顶部对应内容坐标 1400；day5 的偏移是 5×300 = 1500 > 1400，
+      // ⇒ 视口顶部**还没到**第 6 天的起点，落在 day4（偏移 1200 ≤ 1400）⇒ 下标 **4**。
+      // （这不是 bug：最后一天只露出 100px 还没滚到它的起点，判定为第 5 天是正确的。）
+      final tailIndex = table.activeIndex(controller.position.maxScrollExtent);
+      expect(tailIndex, 4,
+          reason: '滚到底时视口顶部对应 day4（1400 < day5 的 1500）→ 应判定为下标 4');
+      expect(tailIndex, greaterThan(0),
+          reason: '关键性质：不是恒 0、也不是恒 Day 1');
       controller.dispose();
     });
 
