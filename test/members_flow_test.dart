@@ -231,7 +231,24 @@ void main() {
       expect(find.text('邀请次数:1'), findsOneWidget);
     });
 
-    testWidgets('members 为空：即使传了 onTap，整条依旧隐藏', (tester) async {
+    testWidgets('members 为空且无 onTap：整条依旧隐藏（向后兼容）', (tester) async {
+      final ValueNotifier<int> opened = ValueNotifier<int>(0);
+      final ValueNotifier<int> invited = ValueNotifier<int>(0);
+      await tester.pumpWidget(_BarHarness(
+        trip: mkTrip(members: <Member>[]),
+        onInvite: () => invited.value++,
+        opened: opened,
+        invited: invited,
+      ));
+
+      expect(find.byType(MembersBar), findsOneWidget);
+      expect(find.byType(Container), findsNothing);
+      expect(find.byType(CircleAvatar), findsNothing);
+      expect(find.text('还没有成员，点击添加'), findsNothing);
+      expect(find.text('已打开成员页:0'), findsOneWidget);
+    });
+
+    testWidgets('members 为空但有 onTap：渲染诚实入口，点击进入成员页', (tester) async {
       final ValueNotifier<int> opened = ValueNotifier<int>(0);
       final ValueNotifier<int> invited = ValueNotifier<int>(0);
       await tester.pumpWidget(_BarHarness(
@@ -242,11 +259,19 @@ void main() {
         invited: invited,
       ));
 
-      expect(find.byType(MembersBar), findsOneWidget);
-      expect(find.byType(Container), findsNothing);
-      expect(find.byType(CircleAvatar), findsNothing);
+      // 诚实入口：0 成员如实告知，不编造假头像/姓名/人数。
+      expect(find.text('还没有成员，点击添加'), findsOneWidget);
+      // 入口不含人数统计、不含 "+" 头像（空态不显示假人）。
       expect(find.text('共 3 人 · 1 间房'), findsNothing);
-      expect(find.text('已打开成员页:0'), findsOneWidget);
+      expect(find.byIcon(Icons.add), findsNothing);
+      expect(find.byType(CircleAvatar), findsNothing);
+
+      // 点击入口 → onTap 被触发（预览页即 _openMembers → 跳成员页）。
+      await tester.tap(find.text('还没有成员，点击添加'));
+      await tester.pump();
+      expect(find.text('已打开成员页:1'), findsOneWidget);
+      // 未触发邀请回调。
+      expect(find.text('邀请次数:0'), findsOneWidget);
     });
   });
 
