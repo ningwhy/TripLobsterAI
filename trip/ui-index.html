@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>章鱼旅行 · UI 原型总览</title>
+<link rel="stylesheet" href="ui-octopus.css">
+<style>
+  .board { max-width: 1180px; margin: 0 auto; padding: 26px 20px 60px; }
+  .board-head { margin-bottom: 16px; }
+  .board-head h1 { font-size: 25px; font-weight: 800; color: var(--title-blue); margin: 0 0 6px; letter-spacing: .5px; }
+  .board-head p { font-size: 12.5px; color: #5E6680; margin: 0; line-height: 1.7; }
+  .board-head .legend { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+  .sw { display: inline-flex; align-items: center; gap: 6px; font-size: 10.5px; color: #5E6680; }
+  .sw i { width: 13px; height: 13px; border-radius: 4px; display: block; }
+
+  .quick {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 6px;
+    background: #fff; border: 1px solid #E4E8F2; border-radius: 12px;
+    padding: 10px 12px; margin-top: 12px; box-shadow: var(--shadow);
+  }
+  .quick > span { font-size: 11px; font-weight: 800; color: var(--purple-ink); margin-right: 4px; }
+  .quick a {
+    font-size: 10.5px; color: var(--purple-ink); background: var(--purple-soft);
+    border: 1px solid #DED9FB; border-radius: var(--r-pill); padding: 5px 10px;
+  }
+  .quick a:hover { background: #E2E0FF; }
+
+  .group-t {
+    font-size: 13px; font-weight: 800; color: var(--purple-ink);
+    margin: 18px 0 10px; padding-left: 10px; border-left: 3px solid var(--purple);
+  }
+  .grid { display: flex; flex-wrap: wrap; gap: 14px; }
+
+  .tile {
+    background: #fff; border-radius: 14px; padding: 10px 10px 0;
+    box-shadow: var(--shadow); border: 1px solid #E4E8F2;
+    width: 248px;
+  }
+  .tile-label {
+    display: flex; align-items: center; justify-content: space-between;
+    font-size: 12px; font-weight: 800; color: var(--title-blue);
+    padding: 0 2px 8px;
+  }
+  .tile-label a { font-size: 10px; font-weight: 600; color: var(--purple); }
+  .tile-label a:hover { text-decoration: underline; }
+  .tile-frame {
+    width: 226px; height: 400px; overflow: hidden;
+    border-radius: 10px 10px 0 0; background: #fff;
+    position: relative; border: 1px solid #EEF0F7;
+  }
+  .tile-frame iframe {
+    width: 430px; height: 762px; border: 0;
+    transform: scale(.525); transform-origin: top left;
+    background: #fff;
+  }
+  .tile-note { font-size: 10px; color: var(--ink-2); padding: 7px 2px 10px; line-height: 1.55; }
+
+  .tips {
+    margin-top: 30px; background: #fff; border-radius: 14px;
+    border: 1px solid #E4E8F2; padding: 18px 20px; box-shadow: var(--shadow);
+  }
+  .tips h2 { font-size: 14px; font-weight: 800; color: var(--purple-ink); margin: 0 0 10px; }
+  .tips ul { margin: 0; padding-left: 18px; font-size: 12px; color: #5E6680; line-height: 1.9; }
+  .tips b { color: var(--ink); }
+
+  .ref { margin-top: 22px; }
+  .ref summary { cursor: pointer; font-size: 12px; font-weight: 700; color: var(--purple-ink); }
+  .ref img { max-width: 100%; border-radius: 10px; margin-top: 10px; border: 1px solid #E4E8F2; }
+</style>
+</head>
+<body>
+
+<div class="board">
+  <div class="board-head">
+    <h1>章鱼旅行 · UI 原型总览</h1>
+    <p>按「03-章鱼旅行 组合图.png」的交互与视觉语言重写。主色由原来的蓝色换成章鱼紫 <b>#7C6DF7</b>，
+       创建行程改为四步引导，行程详情改为按日期分组的彩色时间线，相册支持多选与深色看图，交通改为圆形方式切换 + 车次选中态。
+       所有页面已移除 Bootstrap CDN 依赖，离线可直接打开；业务数据沿用各原页面真实文案，未新增编造内容。</p>
+    <div class="legend">
+      <span class="sw"><i style="background:#7C6DF7"></i>紫 · 主色/景点</span>
+      <span class="sw"><i style="background:#3FCB8E"></i>绿 · 酒店/起点</span>
+      <span class="sw"><i style="background:#FF6B7C"></i>红 · 系统添加/强调</span>
+      <span class="sw"><i style="background:#FFA45C"></i>橙 · 餐饮/交通</span>
+      <span class="sw"><i style="background:#EEF0FF"></i>浅紫 · 日期分组</span>
+      <span class="sw"><i style="background:#3B6AF6"></i>蓝 · 设计稿标题</span>
+    </div>
+  </div>
+
+  <div class="quick">
+    <span>快速打开</span>
+    <a href="ui-trip-create.html">创建行程</a>
+    <a href="ui-trip-preview.html">行程详情</a>
+    <a href="ui-page-p06-photos.html">旅行相册</a>
+    <a href="ui-transport-select.html">选择交通</a>
+    <a href="ui-transport-mode.html">出行方式</a>
+    <a href="ui-add-location.html">添加地点</a>
+    <a href="ui-map-search.html">地图找地点</a>
+    <a href="ui-order-confirm.html">订单确认</a>
+    <a href="ui-footprint.html">我的足迹</a>
+    <a href="ui-trip-map.html">行程地图</a>
+    <a href="ui-trip-members.html">成员管理</a>
+  </div>
+
+  <div class="group-t">① 创建行程引导（参考图顶部四屏）</div>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label"><span>创建行程 · 四步引导</span><a href="ui-trip-create.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-trip-create.html" title="创建行程"></iframe></div>
+      <div class="tile-note">章鱼吉祥物 · 紫色/白色选项卡 · 步骤推进 · 虚线/实心胶囊按钮</div>
+    </div>
+  </div>
+
+  <div class="group-t">② 行程详情长页（参考图第二行最左长屏）</div>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label"><span>创建行程 展示</span><a href="ui-trip-preview.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-trip-preview.html" title="行程详情"></iframe></div>
+      <div class="tile-note">Day 切换 + 滚动反高亮 · 浅紫日期分组 · 左侧时间轴 · 彩色卡片 · 双 FAB</div>
+    </div>
+  </div>
+
+  <div class="group-t">③ 相册 / 照片（参考图第二行中部三屏 + 深色看图）</div>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label"><span>旅行相册</span><a href="ui-page-p06-photos.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-page-p06-photos.html" title="旅行相册"></iframe></div>
+      <div class="tile-note">3 列网格 · 多选勾选 · 已选缩略图 · 深色看图 · 照片位为示意占位</div>
+    </div>
+  </div>
+
+  <div class="group-t">④ 交通选择（参考图右侧两屏）</div>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label"><span>选择交通方式</span><a href="ui-transport-select.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-transport-select.html" title="选择交通方式"></iframe></div>
+      <div class="tile-note">5 个圆形方式图标 · 车次三列列表 · 浅紫选中态 + 左侧竖条</div>
+    </div>
+    <div class="tile">
+      <div class="tile-label"><span>出行方式</span><a href="ui-transport-mode.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-transport-mode.html" title="出行方式"></iframe></div>
+      <div class="tile-note">大交通 / 小交通 · 去程与返程班次 · 默认出行方式</div>
+    </div>
+  </div>
+
+  <div class="group-t">⑤ 其余页面（统一换肤，参考图未直接覆盖）</div>
+  <div class="grid">
+    <div class="tile">
+      <div class="tile-label"><span>添加地点</span><a href="ui-add-location.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-add-location.html" title="添加地点"></iframe></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label"><span>地图找地点</span><a href="ui-map-search.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-map-search.html" title="地图找地点"></iframe></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label"><span>订单确认</span><a href="ui-order-confirm.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-order-confirm.html" title="订单确认"></iframe></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label"><span>我的足迹</span><a href="ui-footprint.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-footprint.html" title="我的足迹"></iframe></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label"><span>行程地图</span><a href="ui-trip-map.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-trip-map.html" title="行程地图"></iframe></div>
+    </div>
+    <div class="tile">
+      <div class="tile-label"><span>成员管理</span><a href="ui-trip-members.html">单独打开 ↗</a></div>
+      <div class="tile-frame"><iframe src="ui-trip-members.html" title="成员管理"></iframe></div>
+    </div>
+  </div>
+
+  <div class="tips">
+    <h2>可操作的交互</h2>
+    <ul>
+      <li><b>创建行程</b>：点选项卡切换选中 → 底部按钮在四步间前进/后退 → 第 4 步生成行程进入详情页。</li>
+      <li><b>行程详情</b>：点 Day 1/2/3 平滑滚动到对应日期分组；手动滚动时高亮自动跟随当前分组（程序化滚动期间抑制抖动）。</li>
+      <li><b>旅行相册</b>：点「管理」进入多选 → 点格子切换勾选 → 底部已选计数实时更新 → 点照片进入深色看图。</li>
+      <li><b>交通选择</b>：点圆形图标切换出行方式 → 点车次行变为浅紫选中态 → 底部确认给反馈。</li>
+      <li>各页底部都有互跳链接；所有页面零外部依赖，可直接离线打开。</li>
+    </ul>
+  </div>
+
+  <details class="ref">
+    <summary>展开查看参考设计原图</summary>
+    <img src="03-章鱼旅行%20组合图.png" alt="03-章鱼旅行 组合图" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
+    <small style="display:none;color:var(--ink-2);font-size:11px;margin-top:8px">参考原图未随页面加载，请在 trip/ 目录下查看「03-章鱼旅行 组合图.png」。</small>
+  </details>
+</div>
+
+</body>
+</html>
