@@ -42,19 +42,19 @@
 
             <!-- 5 个圆形交通方式图标，紫色实心圆为选中 -->
             <div class="mode-row" id="modeRow">
-                <div class="mode-item on" onclick="setMode('airplane')">
+                <div class="mode-item on" data-mode="airplane" onclick="setMode('airplane')">
                     <div class="mode-ic on">✈️</div><small>飞机</small>
                 </div>
-                <div class="mode-item" onclick="setMode('highspeed')">
+                <div class="mode-item" data-mode="highspeed" onclick="setMode('highspeed')">
                     <div class="mode-ic">🚄</div><small>高铁</small>
                 </div>
-                <div class="mode-item" onclick="setMode('train')">
+                <div class="mode-item" data-mode="train" onclick="setMode('train')">
                     <div class="mode-ic">🚃</div><small>火车</small>
                 </div>
-                <div class="mode-item" onclick="setMode('bus')">
+                <div class="mode-item" data-mode="bus" onclick="setMode('bus')">
                     <div class="mode-ic">🚌</div><small>汽车</small>
                 </div>
-                <div class="mode-item" onclick="setMode('drive')">
+                <div class="mode-item" data-mode="drive" onclick="setMode('drive')">
                     <div class="mode-ic">🚗</div><small>自驾</small>
                 </div>
             </div>
@@ -191,7 +191,7 @@
 
         var items = document.querySelectorAll("#modeRow .mode-item");
         for (var k = 0; k < items.length; k++) {
-            var on = (MODES[k].key === currentMode);
+            var on = (items[k].getAttribute("data-mode") === currentMode);
             items[k].classList.toggle("on", on);
             items[k].querySelector(".mode-ic").classList.toggle("on", on);
         }

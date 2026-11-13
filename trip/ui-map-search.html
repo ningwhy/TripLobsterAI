@@ -367,6 +367,8 @@
         <button class="btn-confirm">添加地点</button>
     </div>
 
+    <div class="toast" id="toast"></div>
+
     <div class="nav-links">
         <a href="ui-index.html">总览</a>
         <a href="ui-trip-create.html">创建行程</a>
@@ -403,6 +405,30 @@
         function locate() {
             alert('定位中...\n\n实际项目中调用高德/百度地图SDK获取当前位置');
         }
+
+        let toastTimer = null;
+
+        /** 底部轻量提示；文案只描述原型行为，不编造业务结果。 */
+        function showToast(msg) {
+            const el = document.getElementById('toast');
+            el.textContent = msg;
+            el.classList.add('show');
+            if (toastTimer !== null) { clearTimeout(toastTimer); }
+            toastTimer = setTimeout(function () {
+                el.classList.remove('show');
+                toastTimer = null;
+            }, 1800);
+        }
+
+        document.querySelector('.filter-btn').addEventListener('click', function () {
+            showToast('筛选面板为原型示意，暂未接入真实筛选数据');
+        });
+        document.querySelector('.btn-cancel').addEventListener('click', function () {
+            showToast('已取消，未添加地点');
+        });
+        document.querySelector('.btn-confirm').addEventListener('click', function () {
+            showToast('原型示意：已选地点 #' + selectedPOI + '，实际项目此处写入行程');
+        });
     </script>
 </body>
 </html>
