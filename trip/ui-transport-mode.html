@@ -4,469 +4,244 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>出行方式 - UI原型</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
+    <link rel="stylesheet" href="ui-octopus.css">
     <style>
-        :root {
-            --primary: #4A90D9;
-            --primary-light: #E3F2FD;
-            --bg: #F5F5F5;
-            --card-bg: #FFFFFF;
-            --text-main: #333333;
-            --text-secondary: #666666;
-            --text-light: #999999;
-            --border: #E0E0E0;
-            --success: #2ECC71;
-            --home-gradient: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        }
-
-        /* Home Card */
-        .home-card {
-            background: var(--home-gradient);
-            margin: 16px;
-            border-radius: 16px;
-            padding: 16px;
-            color: white;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-        }
-        .home-card .icon {
-            width: 44px;
-            height: 44px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 20px;
-        }
-        .home-card .info { flex: 1; }
-        .home-card .label { font-size: 11px; opacity: 0.8; }
-        .home-card .address { font-size: 14px; font-weight: 500; }
-        .home-card .edit-btn {
-            padding: 6px 14px;
-            background: rgba(255,255,255,0.2);
-            border-radius: 16px;
-            font-size: 12px;
-            cursor: pointer;
-        }
-
-        /* Copy Itinerary Feature */
-        .copy-section {
-            background: var(--card-bg);
-            margin: 0 16px 12px;
-            border-radius: 12px;
-            padding: 16px;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-        .copy-section .title {
-            font-size: 14px;
-            font-weight: 600;
-            margin-bottom: 12px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .copy-section .title i { color: var(--success); }
-        .copy-input {
-            display: flex;
-            gap: 8px;
-        }
-        .copy-input input {
-            flex: 1;
-            padding: 12px;
-            border: 1px solid var(--border);
-            border-radius: 8px;
-            font-size: 14px;
-            outline: none;
-        }
-        .copy-input input:focus { border-color: var(--primary); }
-        .copy-input button {
-            padding: 12px 20px;
-            background: var(--success);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-        }
-        .copy-tips {
-            font-size: 12px;
-            color: var(--text-light);
-            margin-top: 8px;
-        }
-        .copy-tips span {
-            color: var(--primary);
-            cursor: pointer;
-        }
-        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-            background: var(--bg);
-            color: var(--text-main);
-        }
-
-        /* Header */
-        .app-header {
-            background: var(--card-bg);
-            padding: 12px 16px;
-            display: flex;
-            align-items: center;
-            gap: 12px;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-        }
-        .app-header .back-btn { font-size: 20px; color: var(--text-main); }
-        .app-header .title { font-size: 17px; font-weight: 600; }
-
-        /* Section */
-        .section { background: var(--card-bg); margin-bottom: 12px; padding: 16px; }
-        .section .section-title { font-size: 14px; font-weight: 600; margin-bottom: 12px; }
-
-        /* Transport Mode Selection */
-        .mode-options { display: flex; gap: 12px; }
-        .mode-option {
-            flex: 1;
-            padding: 16px;
-            border: 2px solid var(--border);
-            border-radius: 12px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .mode-option.active {
-            border-color: var(--primary);
-            background: var(--primary-light);
-        }
-        .mode-option .icon { font-size: 32px; margin-bottom: 8px; }
-        .mode-option .name { font-size: 14px; font-weight: 500; }
-        .mode-option .desc { font-size: 11px; color: var(--text-secondary); margin-top: 4px; }
-
-        /* Public Transport Types */
-        .transport-types {
-            display: flex;
-            gap: 8px;
-            margin-top: 12px;
-        }
-        .transport-type {
-            flex: 1;
-            padding: 12px;
-            border: 2px solid var(--border);
-            border-radius: 10px;
-            text-align: center;
-            cursor: pointer;
-            transition: all 0.2s;
-        }
-        .transport-type.active {
-            border-color: var(--primary);
-            background: var(--primary-light);
-        }
-        .transport-type .icon { font-size: 24px; margin-bottom: 4px; }
-        .transport-type .name { font-size: 12px; font-weight: 500; }
-
-        /* Trip Info Card */
-        .trip-info {
-            background: linear-gradient(135deg, var(--primary), #6BB3F0);
-            margin: 16px;
-            border-radius: 12px;
-            padding: 16px;
-            color: white;
-        }
-        .trip-info .cities {
-            font-size: 20px;
-            font-weight: 600;
-            margin-bottom: 4px;
-        }
-        .trip-info .date { font-size: 14px; opacity: 0.9; }
-
-        /* Transport Card */
-        .transport-card {
-            background: var(--card-bg);
-            margin: 0 16px 12px;
-            border-radius: 12px;
-            overflow: hidden;
-            box-shadow: 0 2px 8px rgba(0,0,0,0.08);
-        }
-        .transport-card .card-header {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 14px 16px;
-            background: var(--bg);
-            border-bottom: 1px solid var(--border);
-        }
-        .transport-card .card-header .label {
-            font-size: 14px;
-            font-weight: 600;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-        .transport-card .card-header .label i { font-size: 18px; }
-        .transport-card .card-header .add-btn {
-            font-size: 13px;
-            color: var(--primary);
-            cursor: pointer;
-        }
-
-        /* Transport Type Badge */
-        .transport-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            border-radius: 4px;
-            font-size: 10px;
-            font-weight: 500;
-            margin-left: 8px;
-        }
-        .transport-badge.big { background: #E3F2FD; color: var(--primary); }
-        .transport-badge.small { background: #FFF3E0; color: #FF9800; }
-
-        .transport-card .card-body { padding: 0; }
-        .transport-item {
-            display: flex;
-            align-items: center;
-            padding: 14px 16px;
-            border-bottom: 1px solid var(--border);
-        }
-        .transport-item:last-child { border-bottom: none; }
-        .transport-item .icon {
-            width: 40px;
-            height: 40px;
-            border-radius: 10px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 18px;
-            margin-right: 12px;
-        }
-        .transport-item .icon.flight { background: #FFF3E0; }
-        .transport-item .icon.train { background: #E3F2FD; }
-        .transport-item .info { flex: 1; }
-        .transport-item .info .name { font-size: 14px; font-weight: 500; }
-        .transport-item .info .detail { font-size: 12px; color: var(--text-secondary); }
-        .transport-item .time { text-align: right; }
-        .transport-item .time .date { font-size: 13px; font-weight: 500; }
-        .transport-item .time .hour { font-size: 12px; color: var(--text-secondary); }
-        .transport-item .price { font-size: 14px; font-weight: 600; color: #FF6600; margin-left: 12px; }
-        .transport-item .delete {
-            color: var(--text-light);
-            font-size: 18px;
-            margin-left: 8px;
-            cursor: pointer;
-        }
-
-        /* Empty State */
-        .empty-state {
-            text-align: center;
-            padding: 24px;
-            color: var(--text-secondary);
-        }
-        .empty-state .icon { font-size: 32px; margin-bottom: 8px; opacity: 0.5; }
-        .empty-state .text { font-size: 13px; }
-
-        /* Bottom Button */
-        .bottom-button {
-            position: fixed;
-            bottom: 0;
-            left: 0;
-            right: 0;
-            padding: 16px;
-            background: var(--card-bg);
-            box-shadow: 0 -2px 10px rgba(0,0,0,0.08);
-        }
-        .bottom-button button {
-            width: 100%;
-            padding: 14px;
-            border-radius: 24px;
-            border: none;
-            background: linear-gradient(135deg, var(--primary), #6BB3F0);
-            color: white;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-        }
+        /* 页面补充：把设计系统中的 .tr-t/.tr-s 泛化，供 .field / .search-box 复用 */
+        .tr-t { font-size: 12.5px; font-weight: 700; color: var(--ink); }
+        .tr-s { font-size: 10px; color: var(--ink-2); margin-top: 3px; }
+        .mode-item small { font-size: 9px; color: var(--ink-3); margin-top: 5px; white-space: nowrap; }
+        .mode-item.on small { color: var(--purple-ink); font-weight: 700; }
+        .linkish { color: var(--purple-ink); font-weight: 700; cursor: pointer; }
+        .trip-row[data-group] { cursor: pointer; }
     </style>
 </head>
 <body>
-    <!-- Header -->
-    <div class="app-header">
-        <span class="back-btn"><i class="bi bi-arrow-left"></i></span>
-        <span class="title">出行方式</span>
-    </div>
+<div class="wrap">
 
-    <!-- Home Card -->
-    <div class="home-card">
-        <div class="icon">🏠</div>
-        <div class="info">
-            <div class="label">我的家</div>
-            <div class="address">北京市昌平区</div>
-        </div>
-        <div class="edit-btn" onclick="alert('设置家的位置')">修改</div>
-    </div>
+    <!-- 设计稿标注：蓝色粗体标题 -->
+    <div class="screen-label">交通 · 出行方式 <small>ui-transport-mode.html</small></div>
 
-    <!-- Copy Itinerary (竞品功能) -->
-    <div class="copy-section">
-        <div class="title"><i class="bi bi-link-45deg"></i> 一键复制行程</div>
-        <div class="copy-input">
-            <input type="text" placeholder="粘贴小红书/抖音链接或攻略文章链接">
-            <button onclick="alert('解析中...\n\n识别到：云南5日游\n地点：昆明→大理→丽江\n正在导入...')">导入</button>
+    <div class="phone">
+        <!-- 手机状态栏 -->
+        <div class="statusbar">
+            <span>9:41</span>
+            <span class="sb-r">📶 ▮▮▮ 🔋</span>
         </div>
-        <div class="copy-tips">
-            支持 <span onclick="alert('打开小红书分享链接')">小红书</span> ·
-            <span onclick="alert('打开抖音分享链接')">抖音</span> ·
-            <span onclick="alert('打开马蜂窝文章')">马蜂窝</span> ·
-            <span onclick="alert('打开携程攻略')">携程</span>
-        </div>
-    </div>
 
-    <!-- Trip Info -->
-    <div class="trip-info">
-        <div class="cities">🏠北京昌平 → 云南昆明</div>
-        <div class="date">02/21 - 02/23 · 3天2晚</div>
-    </div>
+        <!-- 返回 ‹ / 居中标题 / 右上操作 -->
+        <div class="app-bar">
+            <a class="bk" href="ui-trip-create.html" title="返回">‹</a>
+            <div class="tt">出行方式</div>
+            <span class="ac hl" onclick="copyTrip()">复制行程</span>
+        </div>
 
-    <!-- Transport Mode -->
-    <div class="section">
-        <div class="section-title">出行方式</div>
-        <div class="mode-options">
-            <div class="mode-option" onclick="selectMode(this, 'self')">
-                <div class="icon">🚗</div>
-                <div class="name">自驾</div>
-                <div class="desc">灵活自由</div>
-            </div>
-            <div class="mode-option active" onclick="selectMode(this, 'public')">
-                <div class="icon">🚄</div>
-                <div class="name">公共交通</div>
-                <div class="desc">高铁/飞机</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Big Transport (大交通 - 跨城) -->
-    <div class="section" style="padding-top: 8px;">
-        <div class="section-title">
-            <i class="bi bi-airplane"></i> 大交通
-            <span class="transport-badge big">跨城</span>
-        </div>
-    </div>
-            <div class="transport-type active" onclick="selectType(this, 'flight')">
-                <div class="icon">✈️</div>
-                <div class="name">飞机</div>
-            </div>
-            <div class="transport-type" onclick="selectType(this, 'train')">
-                <div class="icon">🚄</div>
-                <div class="name">高铁</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Outbound Transport -->
-    <div class="transport-card">
-        <div class="card-header">
-            <div class="label"><i class="bi bi-airplane" style="color: #FF6600;"></i> 去程</div>
-            <span class="add-btn" onclick="addTransport('outbound')">+ 添加</span>
-        </div>
-        <div class="card-body">
-            <div class="transport-item">
-                <div class="icon flight">✈️</div>
-                <div class="info">
-                    <div class="name">中国国航 CA1515</div>
-                    <div class="detail">上海浦东 → 北京首都</div>
+        <div class="phone-body">
+            <!-- 我的家 -->
+            <div class="field">
+                <span style="font-size:20px">🏠</span>
+                <div style="flex:1;min-width:0">
+                    <div class="tr-t">我的家</div>
+                    <div class="tr-s">北京市昌平区</div>
                 </div>
-                <div class="time">
-                    <div class="date">02/21</div>
-                    <div class="hour">08:00</div>
+                <button class="btn btn-ghost btn-sm" type="button" onclick="editHome()">修改</button>
+            </div>
+
+            <!-- 一键复制行程 -->
+            <div class="section-hint">一键复制行程</div>
+            <div class="field">
+                <input id="copyInput" type="text" placeholder="粘贴小红书/抖音链接或攻略文章链接">
+                <button class="btn btn-primary btn-sm" type="button" onclick="doImport()">导入</button>
+            </div>
+            <div class="section-hint">支持
+                <span class="linkish" onclick="showToast('打开小红书分享链接')">小红书</span> ·
+                <span class="linkish" onclick="showToast('打开抖音分享链接')">抖音</span> ·
+                <span class="linkish" onclick="showToast('打开马蜂窝文章')">马蜂窝</span> ·
+                <span class="linkish" onclick="showToast('打开携程攻略')">携程</span>
+            </div>
+
+            <!-- 灰色圆角概要框 -->
+            <div class="search-box">🔍
+                <div style="flex:1;min-width:0">
+                    <div class="tr-t">🏠北京昌平 → 云南昆明</div>
+                    <div class="tr-s">02/21 - 02/23 · 3天2晚</div>
                 </div>
-                <div class="price">¥680</div>
-                <span class="delete">×</span>
             </div>
-        </div>
-    </div>
 
-    <!-- Return Transport -->
-    <div class="transport-card">
-        <div class="card-header">
-            <div class="label"><i class="bi bi-train-front" style="color: var(--primary);"></i> 返程</div>
-            <span class="add-btn" onclick="addTransport('return')">+ 添加</span>
-        </div>
-        <div class="card-body">
-            <div class="transport-item">
-                <div class="icon train">🚄</div>
-                <div class="info">
-                    <div class="name">高铁 G3</div>
-                    <div class="detail">北京南 → 上海虹桥</div>
+            <div class="divider"></div>
+
+            <!-- 自驾 / 公共交通 切换 -->
+            <div class="section-hint">出行方式</div>
+            <div class="opt-card" id="modeSelf" onclick="selectMode('self')">
+                <div class="opt-ic">🚗</div>
+                <div class="opt-txt">
+                    <div class="opt-t">自驾</div>
+                    <div class="opt-d">灵活自由</div>
                 </div>
-                <div class="time">
-                    <div class="date">02/23</div>
-                    <div class="hour">14:00</div>
+                <div class="opt-arrow">›</div>
+            </div>
+            <div class="opt-card on" id="modePublic" onclick="selectMode('public')">
+                <div class="opt-ic">🚄</div>
+                <div class="opt-txt">
+                    <div class="opt-t">公共交通</div>
+                    <div class="opt-d">高铁/飞机</div>
                 </div>
-                <div class="price">¥553</div>
-                <span class="delete">×</span>
+                <div class="opt-arrow">›</div>
             </div>
-        </div>
-    </div>
 
-    <!-- Transfer Stop -->
-    <div class="transport-card">
-        <div class="card-header">
-            <div class="label"><i class="bi bi-geo-alt" style="color: #2ECC71;"></i> 中转站</div>
-            <span class="add-btn">+ 添加</span>
-        </div>
-        <div class="card-body">
-            <div class="empty-state">
-                <div class="icon">🚉</div>
-                <div class="text">暂无中转站</div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Small Transport (小交通 - 同城) -->
-    <div class="transport-card">
-        <div class="card-header">
-            <div class="label">
-                <i class="bi bi-car-front" style="color: #FF9800;"></i> 小交通
-                <span class="transport-badge small">同城</span>
-            </div>
-            <span class="add-btn" onclick="addTransport('small')">+ 设置</span>
-        </div>
-        <div class="card-body">
-            <div class="transport-item">
-                <div class="icon" style="background: #FFF3E0;">🚕</div>
-                <div class="info">
-                    <div class="name">打车 + 地铁</div>
-                    <div class="detail">默认出行方式</div>
+            <!-- 大交通类型：飞机 / 高铁（沿用原页真实选项） -->
+            <div class="mode-row" id="typeRow" style="justify-content:flex-start;gap:18px;">
+                <div class="mode-item on" onclick="selectType('flight')">
+                    <div class="mode-ic on">✈️</div><small>飞机</small>
                 </div>
-                <span class="delete" onclick="alert('修改同城交通方式')">×</span>
+                <div class="mode-item" onclick="selectType('train')">
+                    <div class="mode-ic">🚄</div><small>高铁</small>
+                </div>
             </div>
+
+            <div class="divider"></div>
+
+            <!-- 大交通 · 跨城：去程 / 返程 / 中转站，均为 .trip-row 卡片 -->
+            <div class="section-hint">大交通 <span class="tag soft">跨城</span> <span class="tag purple" id="bigTag">飞机</span></div>
+            <div class="trip-list">
+                <div class="trip-row on" data-group="big" data-label="去程 · 中国国航 CA1515" onclick="selectTripRow(this)">
+                    <div class="tr-c">
+                        <div class="tr-t">中国国航 CA1515</div>
+                        <div class="tr-s">上海浦东 → 北京首都</div>
+                    </div>
+                    <div class="tr-c mid"><span class="tag purple">去程</span></div>
+                    <div class="tr-c right">
+                        <div class="tr-price">¥680</div>
+                        <div class="tr-s">02/21 08:00</div>
+                    </div>
+                </div>
+                <div class="trip-row" data-group="big" data-label="返程 · 高铁 G3" onclick="selectTripRow(this)">
+                    <div class="tr-c">
+                        <div class="tr-t">高铁 G3</div>
+                        <div class="tr-s">北京南 → 上海虹桥</div>
+                    </div>
+                    <div class="tr-c mid"><span class="tag soft">返程</span></div>
+                    <div class="tr-c right">
+                        <div class="tr-price">¥553</div>
+                        <div class="tr-s">02/23 14:00</div>
+                    </div>
+                </div>
+                <div class="trip-row" onclick="showToast('暂无中转站')">
+                    <div class="tr-c">
+                        <div class="tr-t muted">中转站</div>
+                        <div class="tr-s">暂无中转站</div>
+                    </div>
+                    <div class="tr-c mid"><span class="tag gray">+ 添加</span></div>
+                    <div class="tr-c right"><div class="tr-s tiny muted">暂无数据</div></div>
+                </div>
+            </div>
+
+            <!-- 小交通 · 同城 -->
+            <div class="section-hint">小交通 <span class="tag orange">同城</span></div>
+            <div class="trip-list">
+                <div class="trip-row on" data-group="small" data-label="打车 + 地铁" onclick="selectTripRow(this)">
+                    <div class="tr-c">
+                        <div class="tr-t">打车 + 地铁</div>
+                        <div class="tr-s">默认出行方式</div>
+                    </div>
+                    <div class="tr-c mid"><span class="tag orange">小交通</span></div>
+                    <div class="tr-c right"><div class="tr-s tiny muted">+ 设置</div></div>
+                </div>
+            </div>
+
+            <div class="btn-row">
+                <a class="btn btn-ghost btn-block" href="ui-trip-preview.html">查看行程预览</a>
+            </div>
+        </div>
+
+        <!-- 底部确认 -->
+        <div class="bottom-bar">
+            <button class="btn btn-primary btn-block" type="button" onclick="confirmMode()">确认出行方式</button>
         </div>
     </div>
 
-    <div style="height: 100px;"></div>
-
-    <!-- Bottom Button -->
-    <div class="bottom-button">
-        <button>确认出行方式</button>
+    <!-- 原型页间导航 -->
+    <div class="nav-links">
+        <a href="ui-index.html">总览</a>
+        <a href="ui-trip-create.html">创建行程</a>
+        <a href="ui-trip-preview.html">行程详情</a>
+        <a href="ui-page-p06-photos.html">照片管理</a>
+        <a href="ui-transport-select.html">选择交通方式</a>
+        <a href="ui-transport-mode.html">出行方式</a>
     </div>
+</div>
 
-    <script>
-        function selectMode(el, mode) {
-            document.querySelectorAll('.mode-option').forEach(o => o.classList.remove('active'));
-            el.classList.add('active');
-            document.getElementById('transportTypes').style.display = mode === 'public' ? 'flex' : 'none';
+<div class="toast" id="toast"></div>
+
+<script>
+    "use strict";
+
+    /* 全部班次号 / 价格 / 时刻 / 城市 / 文案均来自原 ui-transport-mode.html */
+    var currentMode = "public";
+    var currentType = "flight";
+    var toastTimer = null;
+
+    /** 底部轻量提示，替代原生 alert。 */
+    function showToast(msg) {
+        var el = document.getElementById("toast");
+        el.textContent = msg;
+        el.classList.add("show");
+        if (toastTimer !== null) { clearTimeout(toastTimer); }
+        toastTimer = setTimeout(function () {
+            el.classList.remove("show");
+            toastTimer = null;
+        }, 1800);
+    }
+
+    /** 自驾 / 公共交通 切换选中；自驾时隐藏大交通类型行。 */
+    function selectMode(mode) {
+        currentMode = mode;
+        document.getElementById("modeSelf").classList.toggle("on", mode === "self");
+        document.getElementById("modePublic").classList.toggle("on", mode === "public");
+        document.getElementById("typeRow").style.display = (mode === "public") ? "flex" : "none";
+        showToast(mode === "public" ? "已选：公共交通 · 高铁/飞机" : "已选：自驾 · 灵活自由");
+    }
+
+    /** 飞机 / 高铁 圆形图标切换。 */
+    function selectType(type) {
+        currentType = type;
+        var items = document.querySelectorAll("#typeRow .mode-item");
+        for (var i = 0; i < items.length; i++) {
+            var on = (i === 0 && type === "flight") || (i === 1 && type === "train");
+            items[i].classList.toggle("on", on);
+            items[i].querySelector(".mode-ic").classList.toggle("on", on);
         }
+        document.getElementById("bigTag").textContent = (type === "flight") ? "飞机" : "高铁";
+        showToast(type === "flight" ? "已选：飞机" : "已选：高铁");
+    }
 
-        function selectType(el, type) {
-            document.querySelectorAll('.transport-type').forEach(o => o.classList.remove('active'));
-            el.classList.add('active');
+    /** 同组内互斥选中 .trip-row（浅紫底 + 左侧紫色竖条）。 */
+    function selectTripRow(el) {
+        var group = el.getAttribute("data-group");
+        var rows = document.querySelectorAll('.trip-row[data-group="' + group + '"]');
+        for (var i = 0; i < rows.length; i++) {
+            rows[i].classList.remove("on");
         }
+        el.classList.add("on");
+        showToast("已选：" + el.getAttribute("data-label"));
+    }
 
-        function addTransport(type) {
-            alert('将跳转到OTA平台选择' + (type === 'outbound' ? '去程' : '返程') + '交通\n\n实际项目中通过DeepLink跳转到携程/飞猪');
-        }
-    </script>
+    /** 导入按钮：仅做原型反馈，不展示任何未提供的识别结果。 */
+    function doImport() {
+        var v = document.getElementById("copyInput").value.replace(/^\s+|\s+$/g, "");
+        showToast(v ? "已收到链接，导入功能为原型占位" : "请先粘贴攻略链接");
+    }
+
+    function copyTrip() { showToast("一键复制行程（原型占位）"); }
+    function editHome() { showToast("设置家的位置"); }
+
+    /** 底部确认：toast 反馈后跳转行程预览。 */
+    function confirmMode() {
+        var label = (currentMode === "public") ? "公共交通" : "自驾";
+        showToast("已确认出行方式：" + label + "，前往行程预览");
+        setTimeout(function () {
+            window.location.href = "ui-trip-preview.html";
+        }, 1200);
+    }
+</script>
 </body>
 </html>
