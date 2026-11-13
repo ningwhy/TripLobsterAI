@@ -26,6 +26,7 @@ import '../widgets/timeline/price_refresh_bar.dart';
 import '../widgets/timeline/preview_top_bar.dart';
 import '../widgets/timeline/timeline_row.dart';
 import 'trip_create_page.dart';
+import 'trip_members_page.dart';
 import 'trip_map_page.dart';
 import 'route_poster_page.dart';
 import 'schematic_map_page.dart';
@@ -276,7 +277,11 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
               onSave: _saveTrip,
               subtitle: _tripSubtitle,
             ),
-            MembersBar(trip: widget.trip, onInvite: _onInvite),
+            MembersBar(
+              trip: widget.trip,
+              onInvite: _onInvite,
+              onTap: _openMembers,
+            ),
             Container(
               color: PreviewColors.navy,
               padding: const EdgeInsets.fromLTRB(10, 2, 10, 8),
@@ -624,10 +629,18 @@ class _TripPreviewPageState extends State<TripPreviewPage> {
   }
 
   void _onInvite() {
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text(PreviewStrings.inviteTodo)),
+    _openMembers();
+  }
+
+  /// 打开成员管理页：按 id 从 TripProvider 读真实成员，⛔ 不带示例数据。
+  /// `PreviewStrings.inviteTodo` 常量保留（其他位置/后续接入仍可引用），此处不再用占位 SnackBar。
+  void _openMembers() {
+    Navigator.push(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => TripMembersPage(tripId: widget.trip.id),
+      ),
     );
-    _showPosterSheet();
   }
 
   /// 进入完整编辑页（T04：await 返回后重算可执行性提示）
