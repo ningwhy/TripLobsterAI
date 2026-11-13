@@ -1,7 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import 'config/app_config.dart';
-import 'theme/app_colors.dart';
+import 'theme/octopus_theme.dart';
 import 'services/storage_service.dart';
 import 'providers/trip_provider.dart';
 import 'pages/home_page.dart';
@@ -28,20 +28,7 @@ class TripApp extends StatelessWidget {
       child: MaterialApp(
         title: '旅行行程助手',
         debugShowCheckedModeBanner: false,
-        theme: ThemeData(
-          primarySwatch: Colors.green,
-          useMaterial3: true,
-          colorScheme: ColorScheme.fromSeed(
-            seedColor: AppColors.green,
-            brightness: Brightness.light,
-          ),
-          scaffoldBackgroundColor: AppColors.mintBg,
-          appBarTheme: const AppBarTheme(
-            backgroundColor: Colors.white,
-            foregroundColor: Color(0xFF333333),
-            elevation: 0,
-          ),
-        ),
+        theme: OctopusTheme.build(),
         home: const HomePage(),
       ),
     );
