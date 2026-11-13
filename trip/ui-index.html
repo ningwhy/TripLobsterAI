@@ -184,8 +184,11 @@
 
   <details class="ref">
     <summary>展开查看参考设计原图</summary>
-    <img src="03-章鱼旅行%20组合图.png" alt="03-章鱼旅行 组合图" onerror="this.style.display='none';this.nextElementSibling.style.display='block'">
-    <small style="display:none;color:var(--ink-2);font-size:11px;margin-top:8px">参考原图未随页面加载，请在 trip/ 目录下查看「03-章鱼旅行 组合图.png」。</small>
+    <!-- 本页会被同步到内层 trip/trip/ 归档副本，参考图只在外层根目录有：
+         先试同目录，失败再回退到上一级，两次都失败才显示文字说明。 -->
+    <img src="03-章鱼旅行%20组合图.png" alt="03-章鱼旅行 组合图"
+         onerror="if(!this.dataset.retried){this.dataset.retried='1';this.src='../03-章鱼旅行%20组合图.png';}else{this.style.display='none';this.nextElementSibling.style.display='block';}">
+    <small style="display:none;color:var(--ink-2);font-size:11px;margin-top:8px">参考原图未随页面加载，请在项目根目录查看「03-章鱼旅行 组合图.png」。</small>
   </details>
 </div>
 
