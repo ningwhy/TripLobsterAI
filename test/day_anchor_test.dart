@@ -691,5 +691,37 @@ void main() {
       expect(table.activeIndex(-100), 0,
           reason: '像素在已知偏移之前，未测全仍不得抢高亮');
     });
+
+    test('W6. activeIndex 的 ε 委托（pixels+epsilon）：496 邻 500 日界翻日，删 +eps 会错判',
+        () {
+      // 击杀 day_anchor_table.dart:82 的 ε 委托变异（存活 mutant W6-L82，#16 建议项）。
+      // 手算：dayCount=3，offsets=[0.0,500.0,1000.0]（测得全，known.length==dayCount，
+      //   守卫不触发）。pixels=496, epsilon=4 → y=500。
+      //   activeIndexFor([0,500,1000], 500) = 0<=500✓(0)、500<=500✓(1)、1000<=500✗
+      //     → 最后一个满足的是下标 1 → 期望 **1**。
+      // 变异（漏写 +epsilon，直接以 pixels 入参）：y=496 → 0<=496✓、500<=496✗
+      //     → 下标 0 → Actual 0。Expected<1>/Actual<0> 冲突 → 打红（已实测 KILL-FLIP）。
+      final table = DayAnchorTable(dayCount: 3);
+      table.offsets..clear()..addAll(<double?>[0.0, 500.0, 1000.0]);
+      expect(table.activeIndex(496), 1,
+          reason: 'pixels=496 邻 500 日界，+eps 后落在第 2 天（下标1）');
+      // sanity：远离日界不受影响
+      expect(table.activeIndex(100000), 2, reason: '远超所有偏移 → 末天');
+      expect(table.activeIndex(-100), 0, reason: '日界之前 → 首天');
+    });
+
+    test('W6. targetFor 透传 epsilon：自定义 eps 必须下传，漏传错算目标位置', () {
+      // 击杀 day_anchor_table.dart:89 的 ε 委托变异（存活 mutant W6-L89，#16 建议项）。
+      // 手算：offsets=[100.0,500.0,1000.0]（测得全），offsetOf(0)=100。
+      //   targetFor(0, epsilon:10) = targetOffset(100, epsilon:10) = 100-10 = 90。
+      // 变异（targetOffset(o) 用默认 eps=4）：100-4 = 96。
+      //   Expected<90.0>/Actual<96.0> 冲突 → 打红（已实测 KILL-FLIP）。
+      final table = DayAnchorTable(dayCount: 3);
+      table.offsets..clear()..addAll(<double?>[100.0, 500.0, 1000.0]);
+      expect(table.targetFor(0, epsilon: 10), 90.0,
+          reason: '自定义 epsilon=10 必须下传到 targetOffset');
+      // sanity：默认 eps=4 仍是 96，与 ② 组契约一致
+      expect(table.targetFor(0, epsilon: 4), 96.0);
+    });
   });
 }
