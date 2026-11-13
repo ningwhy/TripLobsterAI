@@ -9,6 +9,7 @@ class StorageService {
   static const String _settingsKey = 'settings';
   static const String _deletedTripsKey = 'deleted_trips';
   static const String _lastSyncKey = 'last_sync_ms';
+  static const String _selectedPhotoIdsKey = 'selected_photo_ids';
 
   late SharedPreferences _prefs;
 
@@ -128,5 +129,19 @@ class StorageService {
     final settings = await getSettings();
     settings[key] = value;
     await _prefs.setString(_settingsKey, jsonEncode(settings));
+  }
+
+  // 旅行相册：归档的「真实设备相册 assetId」列表（只新增，不动既有键与格式）
+
+  /// 读回上次「完成」归档的 assetId 列表；从未归档过返回空列表。
+  Future<List<String>> getSelectedPhotoIds() async {
+    final List<String>? data = _prefs.getStringList(_selectedPhotoIdsKey);
+    if (data == null) return [];
+    return List<String>.unmodifiable(data);
+  }
+
+  /// 持久化选中的 assetId 列表（真实数据，不做任何补齐 / 去重以外的加工）。
+  Future<void> saveSelectedPhotoIds(List<String> ids) async {
+    await _prefs.setStringList(_selectedPhotoIdsKey, List<String>.of(ids));
   }
 }

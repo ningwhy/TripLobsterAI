@@ -12,6 +12,7 @@ import 'footprint_page.dart';
 import 'location_search_page.dart';
 import 'ai_plan_page.dart';
 import 'cloud_settings_page.dart';
+import 'gallery_page.dart';
 
 class HomePage extends StatefulWidget {
   const HomePage({super.key});
@@ -58,7 +59,7 @@ class _HomePageState extends State<HomePage> {
           children: [
             _buildHomeTab(),
             const FootprintPage(),
-            _buildGalleryTab(),
+            const GalleryPage(),
             _buildMineTab(),
           ],
         ),
@@ -818,37 +819,6 @@ class _HomePageState extends State<HomePage> {
             child: const Text('删除'),
           ),
         ],
-      ),
-    );
-  }
-
-  // ================= 相册 Tab（占位，P1-4 照片归档） =================
-  Widget _buildGalleryTab() {
-    return Container(
-      color: AppColors.mintBg,
-      child: Center(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Container(
-              width: 88,
-              height: 88,
-              decoration: const BoxDecoration(color: AppColors.lavender, shape: BoxShape.circle),
-              child: const Icon(Icons.photo_library_outlined, size: 40, color: Color(0xFF9B7EDE)),
-            ),
-            const SizedBox(height: 18),
-            const Text('相册功能开发中', style: TextStyle(fontSize: 17, fontWeight: FontWeight.bold, color: AppColors.textPrimary)),
-            const SizedBox(height: 8),
-            const Padding(
-              padding: EdgeInsets.symmetric(horizontal: 48),
-              child: Text(
-                '将支持行程照片自动归档、旅行地图和 AI 游记生成',
-                textAlign: TextAlign.center,
-                style: TextStyle(fontSize: 13, color: AppColors.textSub, height: 1.5),
-              ),
-            ),
-          ],
-        ),
       ),
     );
   }
