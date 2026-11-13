@@ -652,5 +652,44 @@ void main() {
       expect(table.targetFor(0), 0);
       controller.dispose();
     });
+
+    test('E4. 部分测全（known 非空但未齐）→ activeIndex 恒 0，即使像素已越过已测天的起点',
+        () {
+      // ⛔ 这是 #16 独立复核指出的**必补项**：此前删掉 day_anchor_table.dart:81 的
+      //    守卫 `if (known.length != dayCount) return 0;` 后，全量 41 例仍全绿
+      //    （W2/W16 存活）—— 守卫没有任何"杀伤力"，等于裸奔。
+      //
+      // 杀伤逻辑（手算核对）：
+      //   dayCount=3；measured 状态为 offsets=[0.0, 500.0, null]
+      //   （day0/day1 已挂上、day2 还没挂上 —— 正是长行程首帧 measure() 的典型产物）。
+      //   known = [0.0, 500.0]，长度 2 != dayCount(3) → 守卫生效。
+      //   调用 activeIndex(600)：pixels=600, epsilon=4 → y=604。
+      //     · 守卫生效（现状）：直接 return 0 —— 未测全绝不抢高亮。
+      //     · 删掉守卫（变异）：activeIndexFor([0.0, 500.0], 604)
+      //         = 0<=604 ✓(0)、500<=604 ✓(1) → 返回 **1**。
+      //   ⇒ 期望 0 与变异后的 1 冲突 → 变异被打红 → 守卫确有杀伤力。
+      //
+      // 语义：day2 还没量到，若此时已根据 day0/day1 的偏移把高亮跳到第 2 天，
+      //      就是"用残缺偏移抢高亮"的旧 bug。守卫正是拦这个。
+      final table = DayAnchorTable(dayCount: 3);
+      // 直接构造 measure() 在"部分挂载"时产出的 offsets 状态（不依赖真实 RenderBox：
+      // 本用例只验证 activeIndex 的守卫契约，measure 本身由 E1/E2/E3 覆盖）。
+      table.offsets
+        ..clear()
+        ..addAll(<double?>[0.0, 500.0, null]);
+      expect(table.offsets.whereType<double>().length, 2,
+          reason: '已知偏移 2 个，未测全（dayCount=3）');
+
+      // 像素已越过 day1 起点（500），按已知偏移本该判定为第 2 天（下标 1）；
+      // 但因未测全，守卫强制返回 0。
+      expect(table.activeIndex(600), 0,
+          reason: '未测全 → 不抢高亮，恒 0（守卫的杀伤点）');
+      // 更极端：像素远超所有已知偏移，仍必须 0。
+      expect(table.activeIndex(100000), 0,
+          reason: '即使像素远超已知偏移，未测全也不得抢高亮');
+      // 反方向：像素在 day0 起点之前（负），守卫同样压制为 0。
+      expect(table.activeIndex(-100), 0,
+          reason: '像素在已知偏移之前，未测全仍不得抢高亮');
+    });
   });
 }
